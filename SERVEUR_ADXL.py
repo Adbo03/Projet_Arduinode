@@ -33,7 +33,7 @@ def notification_handler(sender, data):
 async def run_ble():
     print(f"Recherche de la carte '{DEVICE_NAME}'...")
     device = await BleakScanner.find_device_by_name(DEVICE_NAME)
-    
+
     if not device:
         print("Carte introuvable. Fermez la fenêtre graphique pour quitter.")
         return
@@ -54,6 +54,7 @@ async def run_ble():
             await client.stop_notify(UUID_X)
             await client.stop_notify(UUID_Y)
             await client.stop_notify(UUID_Z)
+            await client.disconnect()
 
 def start_ble_thread():
     """Lance la boucle asynchrone BLE dans un Thread séparé."""
@@ -88,7 +89,7 @@ if __name__ == "__main__":
     ble_thread.start()
 
     # Starting the display window (update every 50ms)
-    ani = animation.FuncAnimation(fig, update_plot, interval=50, blit=True)
+    ani = animation.FuncAnimation(fig, update_plot, interval=50, blit=True, cache_frame_data=False)
     
     plt.show() 
     
