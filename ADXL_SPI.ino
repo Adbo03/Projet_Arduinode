@@ -20,6 +20,9 @@ BLEFloatCharacteristic xAcceloChar("2A58", BLERead | BLENotify);
 BLEFloatCharacteristic yAcceloChar("2A59", BLERead | BLENotify);
 BLEFloatCharacteristic zAcceloChar("2A5A", BLERead | BLENotify);
 
+BLEFloatCharacteristic pitchChar("2A5B", BLERead | BLENotify);  // Y rotation
+BLEFloatCharacteristic rollChar("2A5C", BLERead | BLENotify);   // X rotation
+
 void writeRegister(uint8_t reg, uint8_t value) {
   uint8_t address = (reg << 1) | 0x00; 
   digitalWrite(CS_PIN, LOW);
@@ -54,6 +57,8 @@ void setup() {
   adxlService.addCharacteristic(xAcceloChar);
   adxlService.addCharacteristic(yAcceloChar);
   adxlService.addCharacteristic(zAcceloChar);
+  adxlService.addCharacteristic(pitchChar); 
+  adxlService.addCharacteristic(rollChar);
 
   // add service
   BLE.addService(adxlService);
@@ -62,6 +67,8 @@ void setup() {
   xAcceloChar.writeValue(0);
   yAcceloChar.writeValue(0);
   zAcceloChar.writeValue(0);
+  pitchChar.writeValue(0);
+  rollChar.writeValue(0);
 
   // start advertising
   BLE.advertise();
@@ -120,14 +127,22 @@ void loop() {
       float ay = ((float)y_raw) / SCALE_FACTOR;
       float az = ((float)z_raw) / SCALE_FACTOR;
 
+      float pitch = atan2(-ax, sqrt(ay * ay + az * az)) * 180.0 / PI;
+      float roll = atan2(ay, az) * 180.0 / PI;
+
       // Bluetooth Update
       xAcceloChar.writeValue(ax);
       yAcceloChar.writeValue(ay);
       zAcceloChar.writeValue(az);
+      pitchChar.writeValue(pitch); 
+      rollChar.writeValue(roll);
 
       Serial.print("X: "); Serial.print(ax, 3);
       Serial.print(" Y: "); Serial.print(ay, 3);
       Serial.print(" Z: "); Serial.println(az, 3);
+      Serial.print("  |  Pitch: "); Serial.print(pitch, 2);
+      Serial.print("° Roll: "); Serial.print(roll, 2);
+      Serial.println("°");
 
       delay(100);
 

@@ -11,11 +11,16 @@ DEVICE_NAME = "ADXL355Z"
 UUID_X = "00002a58-0000-1000-8000-00805f9b34fb"
 UUID_Y = "00002a59-0000-1000-8000-00805f9b34fb"
 UUID_Z = "00002a5a-0000-1000-8000-00805f9b34fb"
+UUID_PITCH = "00002a5b-0000-1000-8000-00805f9b34fb"
+UUID_ROLL = "00002a5c-0000-1000-8000-00805f9b34fb"
 
 BUFFER_SIZE = 50
 x_data = deque([0.0]*BUFFER_SIZE, maxlen=BUFFER_SIZE)
 y_data = deque([0.0]*BUFFER_SIZE, maxlen=BUFFER_SIZE)
 z_data = deque([0.0]*BUFFER_SIZE, maxlen=BUFFER_SIZE)
+
+pitch_data = deque([0.0]*BUFFER_SIZE, maxlen=BUFFER_SIZE)
+roll_data = deque([0.0]*BUFFER_SIZE, maxlen=BUFFER_SIZE)
 
 # --- 1. BLE (Background) ---
 def notification_handler(sender, data):
@@ -29,6 +34,10 @@ def notification_handler(sender, data):
         y_data.append(val)
     elif sender_uuid == UUID_Z:
         z_data.append(val)
+    elif sender_uuid == UUID_PITCH:
+        pitch_data.append(val)
+    elif sender_uuid == UUID_ROLL:
+        roll_data.append(val)
 
 async def run_ble():
     print(f"Recherche de la carte '{DEVICE_NAME}'...")
@@ -43,6 +52,8 @@ async def run_ble():
         await client.start_notify(UUID_X, notification_handler)
         await client.start_notify(UUID_Y, notification_handler)
         await client.start_notify(UUID_Z, notification_handler)
+        await client.start_notify(UUID_PITCH, notification_handler)
+        await client.start_notify(UUID_ROLL, notification_handler)
         
         # Infinite loop to keep the connection alive
         try:
@@ -54,6 +65,8 @@ async def run_ble():
             await client.stop_notify(UUID_X)
             await client.stop_notify(UUID_Y)
             await client.stop_notify(UUID_Z)
+            await client.stop_notify(UUID_PITCH)
+            await client.stop_notify(UUID_ROLL)
             await client.disconnect()
 
 def start_ble_thread():
@@ -63,23 +76,35 @@ def start_ble_thread():
     loop.run_until_complete(run_ble())
 
 # --- 2. Display (Matplotlib) ---
-fig, ax = plt.subplots()
-ax.set_title("ADXL355 Accéléromètre - Temps Réel")
-ax.set_ylim(-3.0, 3.0)  # Y scale between -3g and +3g
-ax.set_ylabel("Accélération (g)")
-ax.set_xlim(0, BUFFER_SIZE)
+fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(8, 8))
+plt.subplots_adjust(hspace=0.4) 
 
-line_x, = ax.plot(x_data, label='Axe X', color='red')
-line_y, = ax.plot(y_data, label='Axe Y', color='green')
-line_z, = ax.plot(z_data, label='Axe Z', color='blue')
-ax.legend(loc='upper right')
+# Graph 1 : Movement
+ax1.set_title("Accélération (g)")
+ax1.set_ylim(-2.5, 2.5)
+ax1.set_xlim(0, BUFFER_SIZE)
+line_x, = ax1.plot(x_data, label='X', color='red')
+line_y, = ax1.plot(y_data, label='Y', color='green')
+line_z, = ax1.plot(z_data, label='Z', color='blue')
+ax1.legend(loc='upper right', fontsize='small')
+
+# Graph 2 : Angle
+ax2.set_title("Inclinaison (Degrés)")
+ax2.set_ylim(-180, 180)
+ax2.set_xlim(0, BUFFER_SIZE)
+line_pitch, = ax2.plot(pitch_data, label='Rotation Y', color='orange', lw=2)
+line_roll,  = ax2.plot(roll_data, label='Rotation X', color='purple', lw=2)
+ax2.legend(loc='upper right', fontsize='small')
 
 def update_plot(frame):
     """Mise à jour périodique des courbes avec le contenu actuel du buffer."""
-    line_x.set_ydata(x_data)
-    line_y.set_ydata(y_data)
-    line_z.set_ydata(z_data)
-    return line_x, line_y, line_z
+    line_x.set_ydata(list(x_data))
+    line_y.set_ydata(list(y_data))
+    line_z.set_ydata(list(z_data))
+    line_pitch.set_ydata(list(pitch_data))
+    line_roll.set_ydata(list(roll_data))
+
+    return line_x, line_y, line_z, line_pitch, line_roll
 
 # --- 3. MAIN  ---
 if __name__ == "__main__":
