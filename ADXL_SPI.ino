@@ -16,9 +16,9 @@ const float SCALE_FACTOR = 256000.0;
 BLEService adxlService("19b10000-e8f2-537e-4f6c-d104768a1214"); // Bluetooth® Low Energy LED Service
 
 // Bluetooth® Low Energy LED Switch Characteristic - custom 128-bit UUID, read and writable by central
-BLEFloatCharacteristic xAcceloChar("2A58", BLERead);
-BLEFloatCharacteristic yAcceloChar("2A59", BLERead);
-BLEFloatCharacteristic zAcceloChar("2A5A", BLERead);
+BLEFloatCharacteristic xAcceloChar("2A58", BLERead | BLENotify);
+BLEFloatCharacteristic yAcceloChar("2A59", BLERead | BLENotify);
+BLEFloatCharacteristic zAcceloChar("2A5A", BLERead | BLENotify);
 
 void writeRegister(uint8_t reg, uint8_t value) {
   uint8_t address = (reg << 1) | 0x00; 
