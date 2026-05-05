@@ -1,86 +1,95 @@
 import asyncio
+import threading
 import struct
-import csv
-import time
 from collections import deque
+import matplotlib.pyplot as plt
+import matplotlib.animation as animation
 from bleak import BleakClient, BleakScanner
 
-
+# --- CONFIGURATION ---
 DEVICE_NAME = "ADXL355Z" 
 UUID_X = "00002a58-0000-1000-8000-00805f9b34fb"
 UUID_Y = "00002a59-0000-1000-8000-00805f9b34fb"
 UUID_Z = "00002a5a-0000-1000-8000-00805f9b34fb"
 
-CSV_FILENAME = "adxl355_data.csv"
+BUFFER_SIZE = 50
+x_data = deque([0.0]*BUFFER_SIZE, maxlen=BUFFER_SIZE)
+y_data = deque([0.0]*BUFFER_SIZE, maxlen=BUFFER_SIZE)
+z_data = deque([0.0]*BUFFER_SIZE, maxlen=BUFFER_SIZE)
 
-data_buffer = deque(maxlen=10)
-
-current_data = {"x": 0.0, "y": 0.0, "z": 0.0}
-
-def update_csv():
-    """Modify the csv file with the 10 latest values of the buffer"""
-    with open(CSV_FILENAME, mode='w', newline='') as file:
-        writer = csv.writer(file)
-        writer.writerow(["Timestamp", "X", "Y", "Z"]) 
-        writer.writerows(data_buffer)
-
+# --- 1. BLE (Background) ---
 def notification_handler(sender, data):
-    
-    # Decoding 4 bytes data sent 
+    """Reçoit les données BLE et met à jour les buffers en RAM directement."""
     val = struct.unpack('<f', data)[0]
-    
-    sender_uuid = sender.uuid
+    sender_uuid = sender.uuid.lower()
     
     if sender_uuid == UUID_X:
-        current_data["x"] = val
+        x_data.append(val)
     elif sender_uuid == UUID_Y:
-        current_data["y"] = val
+        y_data.append(val)
     elif sender_uuid == UUID_Z:
-        current_data["z"] = val
-        
-        timestamp = time.strftime('%H:%M:%S') + f".{int(time.time() * 1000 % 1000):03d}"
-        
-        data_buffer.append([timestamp, current_data["x"], current_data["y"], current_data["z"]])
-        
-        update_csv()
-        
-        print(f"[{timestamp}] X:{current_data['x']:+.3f}g | Y:{current_data['y']:+.3f}g | Z:{current_data['z']:+.3f}g")
+        z_data.append(val)
 
-async def run():
+async def run_ble():
     print(f"Recherche de la carte '{DEVICE_NAME}'...")
     device = await BleakScanner.find_device_by_name(DEVICE_NAME)
     
     if not device:
-        print(f"Carte '{DEVICE_NAME}' introuvable. Vérifiez qu'elle est allumée et non connectée à un autre appareil.")
+        print("Carte introuvable. Fermez la fenêtre graphique pour quitter.")
         return
 
-    print(f"Carte trouvée ({device.address}). Connexion en cours...")
-    
     async with BleakClient(device) as client:
-        print("Connecté au BLE ! Configuration des notifications...")
-        
-        # Subscribing for each axis
+        print("Connecté au BLE ! Démarrage du flux de données...")
         await client.start_notify(UUID_X, notification_handler)
         await client.start_notify(UUID_Y, notification_handler)
         await client.start_notify(UUID_Z, notification_handler)
         
-        print(f"Collecte lancée. Les données sont mises à jour dans '{CSV_FILENAME}'.")
-        print("Appuyez sur Ctrl+C pour arrêter.")
-        
+        # Infinite loop to keep the connection alive
         try:
-            # Infinite loop to keep the communication alive
             while True:
                 await asyncio.sleep(1)
-        except asyncio.exceptions.CancelledError:
-            pass 
+        except asyncio.CancelledError:
+            pass
         finally:
-            print("\nArrêt de la collecte...")
             await client.stop_notify(UUID_X)
             await client.stop_notify(UUID_Y)
             await client.stop_notify(UUID_Z)
 
+def start_ble_thread():
+    """Lance la boucle asynchrone BLE dans un Thread séparé."""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(run_ble())
+
+# --- 2. Display (Matplotlib) ---
+fig, ax = plt.subplots()
+ax.set_title("ADXL355 Accéléromètre - Temps Réel")
+ax.set_ylim(-3.0, 3.0)  # Y scale between -3g and +3g
+ax.set_ylabel("Accélération (g)")
+ax.set_xlim(0, BUFFER_SIZE)
+
+line_x, = ax.plot(x_data, label='Axe X', color='red')
+line_y, = ax.plot(y_data, label='Axe Y', color='green')
+line_z, = ax.plot(z_data, label='Axe Z', color='blue')
+ax.legend(loc='upper right')
+
+def update_plot(frame):
+    """Mise à jour périodique des courbes avec le contenu actuel du buffer."""
+    line_x.set_ydata(x_data)
+    line_y.set_ydata(y_data)
+    line_z.set_ydata(z_data)
+    return line_x, line_y, line_z
+
+# --- 3. MAIN  ---
 if __name__ == "__main__":
-    try:
-        asyncio.run(run())
-    except KeyboardInterrupt:
-        print("\nProgramme terminé par l'utilisateur.")
+
+    # Starting the BLE in the background
+    ble_thread = threading.Thread(target=start_ble_thread, daemon=True)
+    ble_thread.start()
+
+    # Starting the display window (update every 50ms)
+    ani = animation.FuncAnimation(fig, update_plot, interval=50, blit=True)
+    
+    plt.show() 
+    
+    print("Fermeture du programme...")
