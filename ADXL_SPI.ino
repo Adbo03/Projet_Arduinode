@@ -97,19 +97,61 @@ void loop() {
     // while the central is still connected to peripheral:
     while (central.connected()) {
 
-      // if the remote device wrote to the characteristic,
+      // if the remote device wrote to the switchCharacteristic,
       // use the value to control the LED:
       if (switchCharacteristic.written()) {
-        if (switchCharacteristic.value()) {   // any value other than 0
+        if (switchCharacteristic.value()) {   
           Serial.println("LED on");
-          digitalWrite(ledPin, HIGH);         // will turn the LED on
-        } else {                              // a 0 value
+          digitalWrite(ledPin, HIGH);         
+        } 
+        else {                              
           Serial.println(F("LED off"));
-          digitalWrite(ledPin, LOW);          // will turn the LED off
+          digitalWrite(ledPin, LOW);          
         }
       }
 
+      // Read from XDATA3 (9 bytes)
+      digitalWrite(CS_PIN, LOW);
+      SPI.transfer((REG_XDATA3 << 1) | 0x01); 
       
+      uint32_t x3 = SPI.transfer(0x00);
+      uint32_t x2 = SPI.transfer(0x00);
+      uint32_t x1 = SPI.transfer(0x00);
+      
+      uint32_t y3 = SPI.transfer(0x00);
+      uint32_t y2 = SPI.transfer(0x00);
+      uint32_t y1 = SPI.transfer(0x00);
+      
+      uint32_t z3 = SPI.transfer(0x00);
+      uint32_t z2 = SPI.transfer(0x00);
+      uint32_t z1 = SPI.transfer(0x00);
+      digitalWrite(CS_PIN, HIGH);
+
+      // Organising the data
+      int32_t x_raw = (x3 << 12) | (x2 << 4) | (x1 >> 4);
+      int32_t y_raw = (y3 << 12) | (y2 << 4) | (y1 >> 4);
+      int32_t z_raw = (z3 << 12) | (z2 << 4) | (z1 >> 4);
+
+      // Sign extension (20 bits)
+      if (x_raw & 0x00080000) x_raw |= 0xFFF00000;
+      if (y_raw & 0x00080000) y_raw |= 0xFFF00000;
+      if (z_raw & 0x00080000) z_raw |= 0xFFF00000;
+
+      float ax = ((float)x_raw) / SCALE_FACTOR;
+      float ay = ((float)y_raw) / SCALE_FACTOR;
+      float az = ((float)z_raw) / SCALE_FACTOR;
+
+      // Bluetooth Update
+      xAcceloChar.writeValue(ax);
+      yAcceloChar.writeValue(ay);
+      zAcceloChar.writeValue(az);
+
+      Serial.print("X: "); Serial.print(ax, 3);
+      Serial.print(" Y: "); Serial.print(ay, 3);
+      Serial.print(" Z: "); Serial.println(az, 3);
+
+      delay(100);
+
     }
     // the central has disconnected
     Serial.println("Disconnected from central: ");
