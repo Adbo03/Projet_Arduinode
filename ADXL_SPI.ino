@@ -16,7 +16,6 @@ const float SCALE_FACTOR = 256000.0;
 BLEService adxlService("19b10000-e8f2-537e-4f6c-d104768a1214"); // Bluetooth® Low Energy LED Service
 
 // Bluetooth® Low Energy LED Switch Characteristic - custom 128-bit UUID, read and writable by central
-BLEByteCharacteristic switchCharacteristic("19b10000-e8f2-537e-4f6c-d104768a1214", BLERead | BLEWrite);
 BLEFloatCharacteristic xAcceloChar("2A58", BLERead);
 BLEFloatCharacteristic yAcceloChar("2A59", BLERead);
 BLEFloatCharacteristic zAcceloChar("2A5A", BLERead);
@@ -29,13 +28,8 @@ void writeRegister(uint8_t reg, uint8_t value) {
   digitalWrite(CS_PIN, HIGH);
 }
 
-const int ledPin = LED_BUILTIN; // internal LED pin
-
 void setup() {
   Serial.begin(9600);
-
-  // set LED pin to output mode
-  pinMode(ledPin, OUTPUT);
 
   // SPI Initialisation
   pinMode(CS_PIN, OUTPUT);
@@ -57,7 +51,6 @@ void setup() {
   BLE.setAdvertisedService(adxlService);
 
   // add the characteristic to the service
-  adxlService.addCharacteristic(switchCharacteristic);
   adxlService.addCharacteristic(xAcceloChar);
   adxlService.addCharacteristic(yAcceloChar);
   adxlService.addCharacteristic(zAcceloChar);
@@ -66,7 +59,6 @@ void setup() {
   BLE.addService(adxlService);
 
   // set the initial value for the characeristic:
-  switchCharacteristic.writeValue(0);
   xAcceloChar.writeValue(0);
   yAcceloChar.writeValue(0);
   zAcceloChar.writeValue(0);
@@ -96,19 +88,6 @@ void loop() {
 
     // while the central is still connected to peripheral:
     while (central.connected()) {
-
-      // if the remote device wrote to the switchCharacteristic,
-      // use the value to control the LED:
-      if (switchCharacteristic.written()) {
-        if (switchCharacteristic.value()) {   
-          Serial.println("LED on");
-          digitalWrite(ledPin, HIGH);         
-        } 
-        else {                              
-          Serial.println(F("LED off"));
-          digitalWrite(ledPin, LOW);          
-        }
-      }
 
       // Read from XDATA3 (9 bytes)
       digitalWrite(CS_PIN, LOW);
