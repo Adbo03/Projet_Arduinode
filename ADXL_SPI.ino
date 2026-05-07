@@ -1,9 +1,11 @@
 #include <ArduinoBLE.h>
 #include <SPI.h>
+#include <SD.h>
 #include <math.h>
 
 // Configuration of SPI Pins
-const int CS_PIN = 10; 
+const int ADXL_CS = 10;
+const int SD_CS = 9; 
 
 // Registers addresses
 const int REG_XDATA3 = 0x08;
@@ -23,29 +25,76 @@ BLEFloatCharacteristic zAcceloChar("2A5A", BLERead | BLENotify);
 BLEFloatCharacteristic pitchChar("2A5B", BLERead | BLENotify);  // Y rotation
 BLEFloatCharacteristic rollChar("2A5C", BLERead | BLENotify);   // X rotation
 
+BLEByteCharacteristic modeChar("2A5D", BLERead | BLEWrite);     // mode (0: Stream, 1: Record, 2: Read)
+
+int currentMode = 0;
+File myFile;
+
 void writeRegister(uint8_t reg, uint8_t value) {
-  uint8_t address = (reg << 1) | 0x00; 
-  digitalWrite(CS_PIN, LOW);
-  SPI.transfer(address);
+  digitalWrite(ADXL_CS, LOW);
+  SPI.transfer((reg << 1) | 0x00);
   SPI.transfer(value);
-  digitalWrite(CS_PIN, HIGH);
+  digitalWrite(ADXL_CS, HIGH);
+}
+
+void readSDToBLE() {
+  myFile = SD.open("adxl355_data.csv");
+  if (myFile) {
+    Serial.println("Début transmission SD via BLE...");
+    while (myFile.available()) {
+
+      float ax = myFile.parseFloat();
+      float ay = myFile.parseFloat();
+      float az = myFile.parseFloat();
+      float pitch = myFile.parseFloat();
+      float roll = myFile.parseFloat();
+
+      xAcceloChar.writeValue(ax);
+      yAcceloChar.writeValue(ay);
+      zAcceloChar.writeValue(az);
+      pitchChar.writeValue(pitch);
+      rollChar.writeValue(roll);
+
+      delay(100); 
+    }
+    myFile.close();
+    Serial.println("Fin de transmission.");
+  }
+  currentMode = 0; // Repasse en mode stream après lecture
+  modeChar.writeValue(0);
 }
 
 void setup() {
-  Serial.begin(9600);
+  Serial.begin(115200);
+  delay(1000); // Laisse le temps au port série de se connecter
+  Serial.println("--- DEMARRAGE DU SYSTEME ---");
 
-  // SPI Initialisation
-  pinMode(CS_PIN, OUTPUT);
-  digitalWrite(CS_PIN, HIGH);
+  // 1. Configurer TOUTES les broches CS en sortie tout de suite
+  pinMode(ADXL_CS, OUTPUT);
+  pinMode(SD_CS, OUTPUT);
+
+  // 2. Désactiver explicitement les deux (état HIGH)
+  digitalWrite(ADXL_CS, HIGH);
+  digitalWrite(SD_CS, HIGH);
+  Serial.println("Pins CS desactivees.");
+
+  // 3. Initialiser le SPI
   SPI.begin();
-  // Parameters : Max 10MHz, Mode 0 (CPOL=0, CPHA=0)
-  SPI.beginTransaction(SPISettings(4000000, MSBFIRST, SPI_MODE0));
+  Serial.println("Bus SPI initialise.");
 
-  while (!Serial) { delay(10); }
+  // 4. Initialiser la SD
+  Serial.println("Tentative initialisation SD...");
+  
+  if (!SD.begin(SD_CS)) {
+    Serial.println("ECHEC : Carte SD non trouvee ou erreur de cablage.");
+    while(1);
+  } else {
+    Serial.println("SUCCES : Carte SD prête.");
+  }
 
   // BLE initialization
   if (!BLE.begin()) {
-    Serial.println("starting Bluetooth® Low Energy module failed!");
+    Serial.println("Echec de l'initialisation du module BLE !");
     while (1);
   }
 
@@ -59,20 +108,22 @@ void setup() {
   adxlService.addCharacteristic(zAcceloChar);
   adxlService.addCharacteristic(pitchChar); 
   adxlService.addCharacteristic(rollChar);
+  adxlService.addCharacteristic(modeChar);
 
   // add service
   BLE.addService(adxlService);
-
+  
   // set the initial value for the characeristic:
   xAcceloChar.writeValue(0);
   yAcceloChar.writeValue(0);
   zAcceloChar.writeValue(0);
   pitchChar.writeValue(0);
   rollChar.writeValue(0);
+  modeChar.writeValue(currentMode);
 
   // start advertising
   BLE.advertise();
-  Serial.println("BLE configuration done.");
+  Serial.println("Configuration BLE terminée.");
 
   Serial.println("Initialisation ADXL355 (SPI)...");
   // Range configuration (2g)
@@ -87,6 +138,7 @@ void setup() {
 void loop() {
   // wait for a Bluetooth® Low Energy central
   BLEDevice central = BLE.central();
+
   // check if a central is connected to this peripheral
   if (central) {
     Serial.print("Connected to central: ");
@@ -95,9 +147,18 @@ void loop() {
 
     // while the central is still connected to peripheral:
     while (central.connected()) {
+      
+      Serial.print("MODE : ");
+      Serial.println(currentMode);
+
+      if(modeChar.written()){
+        currentMode = modeChar.value();
+
+        if(currentMode == 2) readSDToBLE();  // Read from SD card 
+      }
 
       // Read from XDATA3 (9 bytes)
-      digitalWrite(CS_PIN, LOW);
+      digitalWrite(ADXL_CS, LOW);
       SPI.transfer((REG_XDATA3 << 1) | 0x01); 
       
       uint32_t x3 = SPI.transfer(0x00);
@@ -111,7 +172,7 @@ void loop() {
       uint32_t z3 = SPI.transfer(0x00);
       uint32_t z2 = SPI.transfer(0x00);
       uint32_t z1 = SPI.transfer(0x00);
-      digitalWrite(CS_PIN, HIGH);
+      digitalWrite(ADXL_CS, HIGH);
 
       // Organising the data
       int32_t x_raw = (x3 << 12) | (x2 << 4) | (x1 >> 4);
@@ -131,11 +192,29 @@ void loop() {
       float roll = atan2(ay, az) * 180.0 / PI;
 
       // Bluetooth Update
-      xAcceloChar.writeValue(ax);
-      yAcceloChar.writeValue(ay);
-      zAcceloChar.writeValue(az);
-      pitchChar.writeValue(pitch); 
-      rollChar.writeValue(roll);
+
+      // MODE 0 : STREAM LIVE DATA
+      if(currentMode == 0){ 
+        xAcceloChar.writeValue(ax);
+        yAcceloChar.writeValue(ay);
+        zAcceloChar.writeValue(az);
+        pitchChar.writeValue(pitch); 
+        rollChar.writeValue(roll);
+      }
+
+      // MODE 1 : RECORD LIVE DATA ON THE SD CARD
+      else if(currentMode == 1){
+        myFile = SD.open("adxl355_data.csv", FILE_WRITE);
+        if (myFile) {
+          myFile.print(ax, 4); myFile.print(",");
+          myFile.print(ay, 4); myFile.print(",");
+          myFile.print(az, 4); myFile.print(",");
+          myFile.print(pitch, 2); myFile.print(",");
+          myFile.println(roll, 2);
+          myFile.close();
+          Serial.print("Ecriture dans la carte SD.... ");
+        }
+      }
 
       Serial.print("X: "); Serial.print(ax, 3);
       Serial.print(" Y: "); Serial.print(ay, 3);
@@ -145,9 +224,10 @@ void loop() {
       Serial.println("°");
 
       delay(100);
-
     }
+
     // the central has disconnected
     Serial.println("Disconnected from central: ");
   }
 }
+
