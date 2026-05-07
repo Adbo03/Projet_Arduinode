@@ -3,6 +3,7 @@ import threading
 import struct
 from collections import deque
 import matplotlib.pyplot as plt
+from matplotlib.widgets import RadioButtons
 import matplotlib.animation as animation
 from bleak import BleakClient, BleakScanner
 
@@ -13,14 +14,17 @@ UUID_Y = "00002a59-0000-1000-8000-00805f9b34fb"
 UUID_Z = "00002a5a-0000-1000-8000-00805f9b34fb"
 UUID_PITCH = "00002a5b-0000-1000-8000-00805f9b34fb"
 UUID_ROLL = "00002a5c-0000-1000-8000-00805f9b34fb"
+UUID_MODE = "00002a5d-0000-1000-8000-00805f9b34fb"
 
 BUFFER_SIZE = 50
 x_data = deque([0.0]*BUFFER_SIZE, maxlen=BUFFER_SIZE)
 y_data = deque([0.0]*BUFFER_SIZE, maxlen=BUFFER_SIZE)
 z_data = deque([0.0]*BUFFER_SIZE, maxlen=BUFFER_SIZE)
-
 pitch_data = deque([0.0]*BUFFER_SIZE, maxlen=BUFFER_SIZE)
 roll_data = deque([0.0]*BUFFER_SIZE, maxlen=BUFFER_SIZE)
+
+client_global = None
+ble_loop = None
 
 # --- 1. BLE (Background) ---
 def notification_handler(sender, data):
@@ -41,6 +45,7 @@ def notification_handler(sender, data):
 
 async def run_ble():
     print(f"Recherche de la carte '{DEVICE_NAME}'...")
+    global client_global
     device = await BleakScanner.find_device_by_name(DEVICE_NAME)
 
     if not device:
@@ -49,6 +54,7 @@ async def run_ble():
 
     async with BleakClient(device) as client:
         print("Connecté au BLE ! Démarrage du flux de données...")
+        client_global = client
         await client.start_notify(UUID_X, notification_handler)
         await client.start_notify(UUID_Y, notification_handler)
         await client.start_notify(UUID_Z, notification_handler)
@@ -69,15 +75,37 @@ async def run_ble():
             await client.stop_notify(UUID_ROLL)
             await client.disconnect()
 
-def start_ble_thread():
-    """Lance la boucle asynchrone BLE dans un Thread séparé."""
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(run_ble())
+def clear_buffers():
+    """Vide les deques pour repartir de zéro sur le graphe."""
+    x_data.clear(); y_data.clear(); z_data.clear()
+    pitch_data.clear(); roll_data.clear()
+
+    for _ in range(BUFFER_SIZE):
+        x_data.append(0.0); y_data.append(0.0); z_data.append(0.0)
+        pitch_data.append(0.0); roll_data.append(0.0)
+
+def change_mode(label):
+    dict_modes = {"Temps Réel": 0, "Enregistrer SD": 1, "Lire SD": 2}
+    val = dict_modes[label]
+    
+    if label == "Lire SD":
+        clear_buffers() # Clear before reading
+        
+    if client_global:
+        asyncio.run_coroutine_threadsafe(
+            client_global.write_gatt_char(UUID_MODE, bytearray([val])), 
+            ble_loop
+        )
+    print(f"Mode : {label}")
 
 # --- 2. Display (Matplotlib) ---
-fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(8, 8))
-plt.subplots_adjust(hspace=0.4) 
+fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8))
+plt.subplots_adjust(left=0.25, hspace=0.4) 
+
+# Mode buttons 
+rax = plt.axes([0.02, 0.7, 0.15, 0.15], facecolor='#f0f0f0')
+radio = RadioButtons(rax, ('Temps Réel', 'Enregistrer SD', 'Lire SD'))
+radio.on_clicked(change_mode)
 
 # Graph 1 : Movement
 ax1.set_title("Accélération (g)")
@@ -110,12 +138,15 @@ def update_plot(frame):
 if __name__ == "__main__":
 
     # Starting the BLE in the background
-    ble_thread = threading.Thread(target=start_ble_thread, daemon=True)
-    ble_thread.start()
-
-    # Starting the display window (update every 50ms)
-    ani = animation.FuncAnimation(fig, update_plot, interval=50, blit=True, cache_frame_data=False)
+    ble_loop = asyncio.new_event_loop()
     
-    plt.show() 
+    def start_ble():
+        asyncio.set_event_loop(ble_loop)
+        ble_loop.run_until_complete(run_ble())
+
+    threading.Thread(target=start_ble, daemon=True).start()
+    
+    ani = animation.FuncAnimation(fig, update_plot, interval=50, blit=True, cache_frame_data=False)
+    plt.show()
     
     print("Fermeture du programme...")
