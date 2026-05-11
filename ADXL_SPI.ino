@@ -83,14 +83,14 @@ void setup() {
   Serial.println("Bus SPI initialise.");
 
   // 4. Initialiser la SD
-  Serial.println("Tentative initialisation SD...");
+  // Serial.println("Tentative initialisation SD...");
   
-  if (!SD.begin(SD_CS)) {
-    Serial.println("ECHEC : Carte SD non trouvee ou erreur de cablage.");
-    while(1);
-  } else {
-    Serial.println("SUCCES : Carte SD prête.");
-  }
+  // if (!SD.begin(SD_CS)) {
+  //   Serial.println("ECHEC : Carte SD non trouvee ou erreur de cablage.");
+  //   while(1);
+  // } else {
+  //   Serial.println("SUCCES : Carte SD prête.");
+  // }
 
   // BLE initialization
   if (!BLE.begin()) {
@@ -148,12 +148,11 @@ void loop() {
     // while the central is still connected to peripheral:
     while (central.connected()) {
       
-      Serial.print("MODE : ");
-      Serial.println(currentMode);
 
       if(modeChar.written()){
+        Serial.print("MODE : ");
+        Serial.println(currentMode);
         currentMode = modeChar.value();
-
         if(currentMode == 2) readSDToBLE();  // Read from SD card 
       }
 
@@ -174,7 +173,7 @@ void loop() {
       uint32_t z1 = SPI.transfer(0x00);
       digitalWrite(ADXL_CS, HIGH);
 
-      // Organising the data
+      // Organizing the data
       int32_t x_raw = (x3 << 12) | (x2 << 4) | (x1 >> 4);
       int32_t y_raw = (y3 << 12) | (y2 << 4) | (y1 >> 4);
       int32_t z_raw = (z3 << 12) | (z2 << 4) | (z1 >> 4);
@@ -223,7 +222,7 @@ void loop() {
       Serial.print("° Roll: "); Serial.print(roll, 2);
       Serial.println("°");
 
-      delay(100);
+      delay(80);
     }
 
     // the central has disconnected
