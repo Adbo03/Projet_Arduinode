@@ -20,8 +20,8 @@ BUFFER_SIZE = 50
 x_data = deque([0.0]*BUFFER_SIZE, maxlen=BUFFER_SIZE)
 y_data = deque([0.0]*BUFFER_SIZE, maxlen=BUFFER_SIZE)
 z_data = deque([0.0]*BUFFER_SIZE, maxlen=BUFFER_SIZE)
-pitch_data = deque([0.0]*BUFFER_SIZE, maxlen=BUFFER_SIZE)
-roll_data = deque([0.0]*BUFFER_SIZE, maxlen=BUFFER_SIZE)
+latest_pitch = 0.0
+latest_roll = 0.0
 
 client_global = None
 ble_loop = None
@@ -29,6 +29,8 @@ ble_loop = None
 # --- 1. BLE (Background) ---
 def notification_handler(sender, data):
     """Reçoit les données BLE et met à jour les buffers en RAM directement."""
+    global latest_pitch, latest_roll
+
     val = struct.unpack('<f', data)[0]
     sender_uuid = sender.uuid.lower()
     
@@ -39,9 +41,9 @@ def notification_handler(sender, data):
     elif sender_uuid == UUID_Z:
         z_data.append(val)
     elif sender_uuid == UUID_PITCH:
-        pitch_data.append(val)
+        latest_pitch = val
     elif sender_uuid == UUID_ROLL:
-        roll_data.append(val)
+        latest_roll = val
 
 async def run_ble():
     print(f"Recherche de la carte '{DEVICE_NAME}'...")
@@ -78,11 +80,9 @@ async def run_ble():
 def clear_buffers():
     """Vide les deques pour repartir de zéro sur le graphe."""
     x_data.clear(); y_data.clear(); z_data.clear()
-    pitch_data.clear(); roll_data.clear()
 
     for _ in range(BUFFER_SIZE):
         x_data.append(0.0); y_data.append(0.0); z_data.append(0.0)
-        pitch_data.append(0.0); roll_data.append(0.0)
 
 def change_mode(label):
     dict_modes = {"Temps Réel": 0, "Enregistrer SD": 1, "Lire SD": 2}
@@ -116,23 +116,21 @@ line_y, = ax1.plot(y_data, label='Y', color='green')
 line_z, = ax1.plot(z_data, label='Z', color='blue')
 ax1.legend(loc='upper right', fontsize='small')
 
-# Graph 2 : Angle
-ax2.set_title("Inclinaison (Degrés)")
-ax2.set_ylim(-180, 180)
-ax2.set_xlim(0, BUFFER_SIZE)
-line_pitch, = ax2.plot(pitch_data, label='Rotation Y', color='orange', lw=2)
-line_roll,  = ax2.plot(roll_data, label='Rotation X', color='purple', lw=2)
-ax2.legend(loc='upper right', fontsize='small')
+# Angle
+ax2.set_axis_off()
+text_pitch = ax2.text(0.7, 0.8, "Rotation Y : 0.00°", fontsize=15, ha='center', va='center', color='green', weight='regular')
+text_roll  = ax2.text(0.3, 0.8, "Rotation X : 0.00°",  fontsize=15, ha='center', va='center', color='red', weight='regular')
 
 def update_plot(frame):
     """Mise à jour périodique des courbes avec le contenu actuel du buffer."""
     line_x.set_ydata(list(x_data))
     line_y.set_ydata(list(y_data))
     line_z.set_ydata(list(z_data))
-    line_pitch.set_ydata(list(pitch_data))
-    line_roll.set_ydata(list(roll_data))
 
-    return line_x, line_y, line_z, line_pitch, line_roll
+    text_pitch.set_text(f"Rotation Y : {latest_pitch:>.2f}°")
+    text_roll.set_text(f"Rotation X : {latest_roll:>.2f}°")
+
+    return line_x, line_y, line_z, text_pitch, text_roll
 
 # --- 3. MAIN  ---
 if __name__ == "__main__":
