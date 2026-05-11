@@ -1,7 +1,8 @@
 # Node-sismique-3C
 Développement d'un noeud sismique 3 composantes
 
-Composants utilisés : ADXL355Z, NANO ESP32
+Composants utilisés : ADXL355Z, NANO ESP32, lecteur carte SD (JOY-IT), Ultimate GPS (adafruit)
+
 IDE utilisé : Arduino IDE v2.3.8
 
 Ce projet consiste au développement de nodes sismiques 3C low-cost (objectif : ~100€
