@@ -1,7 +1,7 @@
 # Node-sismique-3C
 Développement d'un noeud sismique 3 composantes
 
-Composants utilisés : ADXL355Z, NANO ESP32, lecteur carte SD (JOY-IT), Ultimate GPS (adafruit)
+Composants utilisés : ADXL355Z, NANO ESP32, lecteur carte SD (JOY-IT), Ultimate GPS Breakout v3 (adafruit)
 
 IDE utilisé : Arduino IDE v2.3.8
 
