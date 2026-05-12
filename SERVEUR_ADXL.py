@@ -7,7 +7,7 @@ from matplotlib.widgets import RadioButtons
 import matplotlib.animation as animation
 from bleak import BleakClient, BleakScanner
 
-# --- CONFIGURATION ---
+# --- PARAMETRAGE ---
 DEVICE_NAME = "ADXL355Z" 
 UUID_X = "00002a58-0000-1000-8000-00805f9b34fb"
 UUID_Y = "00002a59-0000-1000-8000-00805f9b34fb"
@@ -26,7 +26,7 @@ latest_roll = 0.0
 client_global = None
 ble_loop = None
 
-# --- 1. BLE (Background) ---
+# --- BLE ---
 def notification_handler(sender, data):
     """Reçoit les données BLE et met à jour les buffers en RAM directement."""
     global latest_pitch, latest_roll
@@ -63,12 +63,14 @@ async def run_ble():
         await client.start_notify(UUID_PITCH, notification_handler)
         await client.start_notify(UUID_ROLL, notification_handler)
         
-        # Infinite loop to keep the connection alive
+        # Boucle infinie pour maintenir la connexion
         try:
             while True:
                 await asyncio.sleep(1)
+
         except asyncio.CancelledError:
             pass
+
         finally:
             await client.stop_notify(UUID_X)
             await client.stop_notify(UUID_Y)
@@ -85,11 +87,8 @@ def clear_buffers():
         x_data.append(0.0); y_data.append(0.0); z_data.append(0.0)
 
 def change_mode(label):
-    dict_modes = {"Temps Réel": 0, "Enregistrer SD": 1, "Lire SD": 2}
+    dict_modes = {"Temps Réel": 0, "Enregistrer SD": 1}
     val = dict_modes[label]
-    
-    if label == "Lire SD":
-        clear_buffers() # Clear before reading
         
     if client_global:
         asyncio.run_coroutine_threadsafe(
@@ -98,16 +97,16 @@ def change_mode(label):
         )
     print(f"Mode : {label}")
 
-# --- 2. Display (Matplotlib) ---
-fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8))
+# --- Affichage (Matplotlib) ---
+fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 6))
 plt.subplots_adjust(left=0.25, hspace=0.4) 
 
-# Mode buttons 
+# Boutons de mode 
 rax = plt.axes([0.02, 0.7, 0.15, 0.15], facecolor='#f0f0f0')
-radio = RadioButtons(rax, ('Temps Réel', 'Enregistrer SD', 'Lire SD'))
+radio = RadioButtons(rax, ('Temps Réel', 'Enregistrer SD'))
 radio.on_clicked(change_mode)
 
-# Graph 1 : Movement
+# Graphe des accélérations 
 ax1.set_title("Accélération (g)")
 ax1.set_ylim(-2.5, 2.5)
 ax1.set_xlim(0, BUFFER_SIZE)
@@ -116,26 +115,35 @@ line_y, = ax1.plot(y_data, label='Y', color='green')
 line_z, = ax1.plot(z_data, label='Z', color='blue')
 ax1.legend(loc='upper right', fontsize='small')
 
-# Angle
+# Angles de rotation
 ax2.set_axis_off()
-text_pitch = ax2.text(0.7, 0.8, "Rotation Y : 0.00°", fontsize=15, ha='center', va='center', color='green', weight='regular')
-text_roll  = ax2.text(0.3, 0.8, "Rotation X : 0.00°",  fontsize=15, ha='center', va='center', color='red', weight='regular')
+text_pitch = ax2.text(0.7, 0.8, "Rotation Y : 0.00°", fontsize=15, ha='center', va='center', color='black', weight='regular')
+text_roll  = ax2.text(0.3, 0.8, "Rotation X : 0.00°",  fontsize=15, ha='center', va='center', color='black', weight='regular')
 
 def update_plot(frame):
     """Mise à jour périodique des courbes avec le contenu actuel du buffer."""
     line_x.set_ydata(list(x_data))
     line_y.set_ydata(list(y_data))
     line_z.set_ydata(list(z_data))
-
     text_pitch.set_text(f"Rotation Y : {latest_pitch:>.2f}°")
     text_roll.set_text(f"Rotation X : {latest_roll:>.2f}°")
+    
+    if abs(latest_pitch) < 1 :
+        text_pitch.set_color("green")
+    else:
+        text_pitch.set_color("red")
+
+    if abs(latest_roll) < 1 :
+        text_roll.set_color("green")
+    else:
+        text_roll.set_color("red")
 
     return line_x, line_y, line_z, text_pitch, text_roll
 
-# --- 3. MAIN  ---
+# --- MAIN  ---
 if __name__ == "__main__":
 
-    # Starting the BLE in the background
+    # Lancement du BLE en arrière-plan 
     ble_loop = asyncio.new_event_loop()
     
     def start_ble():
