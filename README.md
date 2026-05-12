@@ -40,6 +40,22 @@ Protocole SPI :
 - CS / SCL relié à PD10.
 - MOSI / SDA relié à PD11.
 
+Pour ce qui est des autres composants du système, voici comment les connecter : 
+
+Lecteur SD : 
+- GND (lecteur) relié à GND (NANO).
+- 3v3 (lecteur) relié à 3v3 (NANO).
+- CS (lecteur) relié à PD9 (NANO).
+- MOSI (lecteur) relié à PD11 (NANO).
+- CLK (lecteur) relié à PD13 (NANO).
+- MISO (lecteur) relié à PD12 (NANO).
+
+Module GPS :
+- VIN (GPS) relié à 3v3 (NANO).
+- GND (GPS) relié à GND (NANO).
+- TX (GPS) relié à RX0 (NANO).
+- RX (GPS) relié à TX1 (NANO).
+
 L'ADXL propose différentes précisions de mesure. Pour jouer sur cette dernière, dans le code arduino, il faut modifier le **SCALE_FACTOR** et la valeur écrite dans le regsitre **REG_RANGE** :
 
 - Pour +-2g : **REG_RANGE** = 0x01 | **SCALE_FACTOR** = 256 000.
