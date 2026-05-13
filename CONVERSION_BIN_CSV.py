@@ -25,7 +25,7 @@ def convert_bin_to_csv():
     with open(FILE_BIN, "rb") as bin_file, open(FILE_CSV, "w", newline='') as csv_file:
         writer = csv.writer(csv_file)
 
-        writer.writerow(["Acc_X_g", "Acc_Y_g", "Acc_Z_g", "Rotation_X", "Rotation_Y", "Latitute", "Longitude", "Temps"])
+        writer.writerow(["Acc_X_g", "Acc_Y_g", "Acc_Z_g", "Roll", "Pitch", "Latitute", "Longitude", "Time"])
 
         first_bytes = bin_file.peek(4)
         if first_bytes.startswith(b"GPS:"):
