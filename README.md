@@ -55,6 +55,7 @@ Module GPS :
 - GND (GPS) relié à GND (NANO).
 - TX (GPS) relié à RX0 (NANO).
 - RX (GPS) relié à TX1 (NANO).
+- Une resistance de pull-up de 10kΩ entre EN (GPS) et 3v3 (NANO)
 
 L'ADXL propose différentes précisions de mesure. Pour jouer sur cette dernière, dans le code arduino, il faut modifier le **SCALE_FACTOR** et la valeur écrite dans le regsitre **REG_RANGE** :
 
