@@ -46,9 +46,9 @@ Lecteur SD :
 - GND (lecteur) relié à GND (NANO).
 - 3v3 (lecteur) relié à 3v3 (NANO).
 - CS (lecteur) relié à PD9 (NANO).
-- MOSI (lecteur) relié à PD11 (NANO).
-- CLK (lecteur) relié à PD13 (NANO).
-- MISO (lecteur) relié à PD12 (NANO).
+- MOSI (lecteur) relié à PD23 (NANO).
+- CLK (lecteur) relié à PD22 (NANO).
+- MISO (lecteur) relié à PD21 (NANO).
 
 Module GPS :
 - VIN (GPS) relié à 3v3 (NANO).
