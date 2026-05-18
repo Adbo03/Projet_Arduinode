@@ -16,7 +16,9 @@ UUID_PITCH = "00002a5b-0000-1000-8000-00805f9b34fb"
 UUID_ROLL = "00002a5c-0000-1000-8000-00805f9b34fb"
 UUID_MODE = "00002a5d-0000-1000-8000-00805f9b34fb"
 
-BUFFER_SIZE = 50
+PRECISION_STABILITE = 1     # +/- exprimée en °
+
+BUFFER_SIZE = 200
 x_data = deque([0.0]*BUFFER_SIZE, maxlen=BUFFER_SIZE)
 y_data = deque([0.0]*BUFFER_SIZE, maxlen=BUFFER_SIZE)
 z_data = deque([0.0]*BUFFER_SIZE, maxlen=BUFFER_SIZE)
@@ -87,7 +89,7 @@ def clear_buffers():
         x_data.append(0.0); y_data.append(0.0); z_data.append(0.0)
 
 def change_mode(label):
-    dict_modes = {"Temps Réel": 0, "Enregistrer SD": 1}
+    dict_modes = {"Temps Réel": 0, "Enregistrer SD": 1, "Conversion": 2}
     val = dict_modes[label]
         
     if client_global:
@@ -103,7 +105,7 @@ plt.subplots_adjust(left=0.25, hspace=0.4)
 
 # Boutons de mode 
 rax = plt.axes([0.02, 0.7, 0.15, 0.15], facecolor='#f0f0f0')
-radio = RadioButtons(rax, ('Temps Réel', 'Enregistrer SD'))
+radio = RadioButtons(rax, ('Temps Réel', 'Enregistrer SD', 'Conversion'))
 radio.on_clicked(change_mode)
 
 # Graphe des accélérations 
@@ -128,12 +130,12 @@ def update_plot(frame):
     text_pitch.set_text(f"Rotation Y : {latest_pitch:>.2f}°")
     text_roll.set_text(f"Rotation X : {latest_roll:>.2f}°")
     
-    if abs(latest_pitch) < 1 :
+    if abs(latest_pitch) < PRECISION_STABILITE :
         text_pitch.set_color("green")
     else:
         text_pitch.set_color("red")
 
-    if abs(latest_roll) < 1 :
+    if abs(latest_roll) < PRECISION_STABILITE :
         text_roll.set_color("green")
     else:
         text_roll.set_color("red")

@@ -3,20 +3,30 @@
 #include "SdFat.h"
 #include <TinyGPS++.h>
 #include <math.h>
+#include <stdlib.h>
 
 // Paramétrage
-const int ADXL_CS = 10;
-const int SD_CS = 9; 
-const int ODR_FREQUENCY = 4000; // 4kHz
-const int TICK_US = 1000000 / ODR_FREQUENCY;
+#define ADXL_CS 10
+#define SD_CS 9 
+#define SCK_SD 22
+#define MOSI_SD 23
+#define MISO_SD 21
 
-// Structure de données (12 octets par échantillonnages)
+#define ODR_FREQUENCY 4000 // 4kHz
+#define TICK_US 1000000 / ODR_FREQUENCY
+#define PPS_PIN 2
+
+// Bus SPI dédié pour communiquer avec le lecteur SD
+SPIClass sdSPI(HSPI);
+
+// Structure de données (16 octets par échantillonnages)
 struct Sample {
   int32_t x, y, z;
+  uint32_t sub_sec_us; // Microsecondes écoulées depuis le dernier front PPS
 };
 
 // Double buffering
-const int BUF_SIZE = 42; // ~504 octets (proche d'un secteur de carte SD de 512 octets)
+const int BUF_SIZE = 128; 
 Sample buffer[2][BUF_SIZE];
 volatile int activeBuf = 0;
 volatile int bufIdx = 0;
@@ -28,6 +38,7 @@ TinyGPSPlus gps;
 hw_timer_t * timer = NULL;
 
 volatile uint8_t currentMode = 0; 
+volatile uint32_t pps_micros = 0;
 float lastLat = 0, lastLon = 0;
 unsigned long lastBleUpdate = 0;
 
@@ -60,7 +71,11 @@ void IRAM_ATTR SD_handler() {
   if (currentMode == 1){
     ADXL_ReadRaw();
 
-    buffer[activeBuf][bufIdx] = {x_raw, y_raw, z_raw};
+    // Calcul de l'offset exact en microsecondes par rapport à la seconde courante
+    uint32_t current_micros = micros();
+    uint32_t offset_us = current_micros - pps_micros;
+
+    buffer[activeBuf][bufIdx] = {x_raw, y_raw, z_raw, offset_us};
     bufIdx++;
 
     if (bufIdx >= BUF_SIZE) {
@@ -70,6 +85,10 @@ void IRAM_ATTR SD_handler() {
     }
   }
 
+}
+
+void IRAM_ATTR PPS_handler() {
+  pps_micros = micros(); 
 }
 
 void ADXL_ReadRaw(){
@@ -207,17 +226,16 @@ void setup() {
 
   digitalWrite(ADXL_CS, HIGH);
   digitalWrite(SD_CS, HIGH);
-  Serial.println("Pins CS desactivees.");
-  Serial.flush();
 
   SPI.begin();
+  sdSPI.begin(SCK_SD, MISO_SD, MOSI_SD, SD_CS);
   
   Serial.println("Bus SPI initialise.");
 
   Serial.println("Tentative initialisation SD...");
   
   // On utilise SdSpiConfig pour forcer la vitesse à 16MHz (ou 10MHz pour plus de stabilité)
-  if (!sd.begin(SdSpiConfig(SD_CS, SHARED_SPI, SD_SCK_MHZ(10)))) {
+  if (!sd.begin(SdSpiConfig(SD_CS, DEDICATED_SPI, SD_SCK_MHZ(10), &sdSPI))) {
       Serial.println("Erreur Carte SD !");
       sd.initErrorPrint(&Serial); 
       while(1);
@@ -228,6 +246,9 @@ void setup() {
   timerAttachInterrupt(timer, &SD_handler, true);
   timerAlarmWrite(timer, TICK_US, true);
   timerAlarmEnable(timer);
+
+  pinMode(PPS_PIN, INPUT_PULLDOWN);
+  attachInterrupt(digitalPinToInterrupt(PPS_PIN), PPS_handler, RISING);
 
   if (!BLE.begin()) {
     Serial.println("Echec de l'initialisation du module BLE !");
@@ -289,9 +310,15 @@ void loop() {
       if(modeChar.written()){
         currentMode = modeChar.value();
 
-        if(currentMode == 0) Serial.println("Début du stream...");
+        if(currentMode == 0){
+          timerAlarmDisable(timer);
+          detachInterrupt(digitalPinToInterrupt(PPS_PIN));
+          Serial.println("Début du stream...");
+        }
         
         else if(currentMode == 1){
+          timerAlarmEnable(timer);
+          attachInterrupt(digitalPinToInterrupt(PPS_PIN), PPS_handler, RISING);
           Serial.println("Début du stockage des données...");
           
           // On vide les buffers avant de stocker les nouvelles données
@@ -304,7 +331,7 @@ void loop() {
       // Mise à jour Bluetooth
       if(currentMode == 0){ 
         
-        if(millis() - lastBleUpdate >= 50){
+        if(millis() - lastBleUpdate >= 1){
           lastBleUpdate = millis();
           ADXL_ReadRaw();
 
@@ -330,9 +357,6 @@ void loop() {
 
     if (fullFlag) {
       int bufToSave = (activeBuf == 0) ? 1 : 0;
-      
-      // Désactiver l'interruption pour éviter les conflits SPI
-      timerAlarmDisable(timer);
 
       if (!file.isOpen()) {
 
@@ -348,14 +372,12 @@ void loop() {
           file.print(lastLon, 6);
           file.print(",");
 
-          // Formatage manuel de l'heure HH:MM:SS.CC
+          // Formatage manuel de l'heure HH:MM:SS
           if (gps.time.hour() < 10) file.print('0'); file.print(gps.time.hour());
           file.print(':');
           if (gps.time.minute() < 10) file.print('0'); file.print(gps.time.minute());
           file.print(':');
           if (gps.time.second() < 10) file.print('0'); file.print(gps.time.second());
-          file.print('.');
-          if (gps.time.centisecond() < 10) file.print('0'); file.print(gps.time.centisecond());
           
           file.println(); // Fin de la ligne GPS
         }
@@ -367,8 +389,6 @@ void loop() {
         fullFlag = false;
       }
 
-      // Réactiver l'échantillonnage 4kHz
-      timerAlarmEnable(timer);
     }
   }
 
