@@ -35,6 +35,8 @@ def convert_bin_to_csv():
                 lat, lon, time_raw = parts[0], parts[1], parts[2]
             
             hours, minutes, seconds = time_raw.split(':')
+            real_hours = int(hours)
+            real_minutes = int(minutes)
             real_seconds = int(seconds)
             last_us = 0
 
@@ -67,7 +69,18 @@ def convert_bin_to_csv():
             if(last_us > real_us):
                 real_seconds += 1
 
-            timestamp = f"{hours}:{minutes}:{real_seconds:02d}.{real_us:06d}"
+            if(real_seconds > 60):
+                real_minutes += 1
+                real_seconds = 0
+
+            if(real_minutes > 60):
+                real_hours += 1
+                real_minutes = 0
+
+            if(real_hours > 23):
+                real_hours = 0
+
+            timestamp = f"{real_hours:02d}:{real_minutes:02d}:{real_seconds:02d}.{real_us:06d}"
 
             last_us = real_us
 
