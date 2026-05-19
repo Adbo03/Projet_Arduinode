@@ -27,6 +27,8 @@ latest_roll = 0.0
 
 client_global = None
 ble_loop = None
+ble_running = True
+reconnect_delay = 3
 
 # --- BLE ---
 def notification_handler(sender, data):
@@ -48,38 +50,52 @@ def notification_handler(sender, data):
         latest_roll = val
 
 async def run_ble():
-    print(f"Recherche de la carte '{DEVICE_NAME}'...")
-    global client_global
-    device = await BleakScanner.find_device_by_name(DEVICE_NAME)
+    global client_global, ble_running
 
-    if not device:
-        print("Carte introuvable. Fermez la fenêtre graphique pour quitter.")
-        return
-
-    async with BleakClient(device) as client:
-        print("Connecté au BLE ! Démarrage du flux de données...")
-        client_global = client
-        await client.start_notify(UUID_X, notification_handler)
-        await client.start_notify(UUID_Y, notification_handler)
-        await client.start_notify(UUID_Z, notification_handler)
-        await client.start_notify(UUID_PITCH, notification_handler)
-        await client.start_notify(UUID_ROLL, notification_handler)
+    while ble_running:
+        print(f"Recherche de la carte '{DEVICE_NAME}'...")
         
-        # Boucle infinie pour maintenir la connexion
+        device = await BleakScanner.find_device_by_name(DEVICE_NAME)
+
+        if not device:
+            print("Carte introuvable. Nouvelle tentative dans 3 secondes...Fermez la fenêtre graphique pour quitter.")
+            await asyncio.sleep(3)
+            continue
+
+        
         try:
-            while True:
+            client = BleakClient(device, disconnected_callback=on_disconnect)
+            await client.connect()
+            client_global = client
+
+            print("Connecté au BLE ! Démarrage du flux de données...")
+
+            await client.start_notify(UUID_X, notification_handler)
+            await client.start_notify(UUID_Y, notification_handler)
+            await client.start_notify(UUID_Z, notification_handler)
+            await client.start_notify(UUID_PITCH, notification_handler)
+            await client.start_notify(UUID_ROLL, notification_handler)
+
+            while client.is_connected and ble_running:
                 await asyncio.sleep(1)
 
-        except asyncio.CancelledError:
+        except Exception as e:
+            print("Erreur BLE :", e)
+
+        try:
+            if client.is_connected:
+                await client.disconnect()
+        except:
             pass
 
-        finally:
-            await client.stop_notify(UUID_X)
-            await client.stop_notify(UUID_Y)
-            await client.stop_notify(UUID_Z)
-            await client.stop_notify(UUID_PITCH)
-            await client.stop_notify(UUID_ROLL)
-            await client.disconnect()
+        if ble_running:
+            print(f"Tentative de reconnexion dans {reconnect_delay} secondes…")
+            await asyncio.sleep(reconnect_delay)
+
+    print("Arrêt complet du BLE.")
+
+def on_disconnect(client):
+    print("Déconnecté de la carte")
 
 def clear_buffers():
     """Vide les deques pour repartir de zéro sur le graphe."""
@@ -155,6 +171,14 @@ if __name__ == "__main__":
     threading.Thread(target=start_ble, daemon=True).start()
     
     ani = animation.FuncAnimation(fig, update_plot, interval=50, blit=True, cache_frame_data=False)
+
+    def on_close(event):
+        global ble_running
+        ble_running = False
+        print("Fermeture du programme...")
+
+    fig.canvas.mpl_connect('close_event', on_close)
+    
     plt.show()
     
-    print("Fermeture du programme...")
+    
