@@ -26,7 +26,7 @@ struct Sample {
 };
 
 // Double buffering
-const int BUF_SIZE = 128; 
+const int BUF_SIZE = 32; 
 Sample buffer[2][BUF_SIZE];
 volatile int activeBuf = 0;
 volatile int bufIdx = 0;
@@ -235,14 +235,13 @@ void loop() {
         currentMode = modeChar.value();
 
         if(currentMode == 0){
-          timerAlarmDisable(timer);
-          detachInterrupt(digitalPinToInterrupt(PPS_PIN));
           Serial.println("Début du stream...");
+
+          if(file.isOpen()) file.close();
         }
         
         else if(currentMode == 1){
-          timerAlarmEnable(timer);
-          attachInterrupt(digitalPinToInterrupt(PPS_PIN), PPS_handler, RISING);
+  
           Serial.println("Début du stockage des données...");
           
           // On vide les buffers avant de stocker les nouvelles données
@@ -255,8 +254,8 @@ void loop() {
       // Mise à jour Bluetooth
       if(currentMode == 0){ 
         
-        if(millis() - lastBleUpdate >= 1){
-          lastBleUpdate = millis();
+        if(micros() - lastBleUpdate >= 500){
+          lastBleUpdate = micros();
           ADXL_ReadRaw();
 
           float ax = ((float)x_raw) / SCALE_FACTOR;
@@ -309,7 +308,6 @@ void loop() {
       
       if(file.isOpen()){
         file.write((const uint8_t*)&buffer[bufToSave], sizeof(buffer[0]));
-        file.sync();
         fullFlag = false;
       }
 
