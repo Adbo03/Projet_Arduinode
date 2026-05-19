@@ -125,82 +125,6 @@ void ADXL_ReadRaw(){
   if (z_raw & 0x00080000) z_raw |= 0xFFF00000;
 }
 
-void convertBinaryToCsv() {
-  File binFile = sd.open("dataRaw.bin", FILE_READ);
-  File csvFile = sd.open("dataNode.csv", O_RDWR | O_CREAT | O_TRUNC);
-
-  if (!binFile || !csvFile) {
-    Serial.println("Erreur d'ouverture des fichiers !");
-    return;
-  }
-
-  // Variables pour stocker les infos GPS du paquet
-  String lat = "0.0";
-  String lon = "0.0";
-  String time = "00:00:00";
-
-  // 1. Détection et extraction GPS
-  if (binFile.peek() == 'G') {
-    String gpsLine = binFile.readStringUntil('\n'); // "GPS:lat,lon,hh:mm:ss.cc"
-    gpsLine.replace("GPS:", ""); // Retire l'entête
-    
-    // Extraction simple par recherche de virgules
-    int firstComma = gpsLine.indexOf(',');
-    int secondComma = gpsLine.indexOf(',', firstComma + 1);
-    
-    if (firstComma != -1 && secondComma != -1) {
-      lat = gpsLine.substring(0, firstComma);
-      lon = gpsLine.substring(firstComma + 1, secondComma);
-      time = gpsLine.substring(secondComma + 1);
-    }
-  }
-
-  Serial.println("Début de la conversion... Patientez.");
-  
-  // Écriture de l'en-tête CSV
-  csvFile.println("Acc_X(g),Acc_Y(g),Acc_Z(g),Roll(°),Pitch(°),Latitude,Longitude,Time");
-
-  Sample s;
-  uint32_t count = 0;
-  uint32_t totalSamples = binFile.size() / sizeof(Sample);
-
-  while (binFile.available() >= sizeof(Sample)) {
-    // 1. Lire les données binaires brutes
-    binFile.read((uint8_t*)&s, sizeof(Sample));
-
-    // 2. Convertir les entiers bruts en unités "g" 
-    // Rappel : Scale Factor ADXL355 = 256000 LSB/g
-    float ax = ((float)s.x) / SCALE_FACTOR;
-    float ay = ((float)s.y) / SCALE_FACTOR;
-    float az = ((float)s.z) / SCALE_FACTOR;
-
-    float pitch = atan2(-ax, sqrt(ay * ay + az * az)) * 180.0 / PI;
-    float roll = atan2(ay, az) * 180.0 / PI;
-    
-    // 3. Écrire dans le fichier CSV
-    csvFile.print(ax, 6); csvFile.print(",");
-    csvFile.print(ay, 6); csvFile.print(",");
-    csvFile.print(az, 6); csvFile.print(",");
-    csvFile.print(roll, 2); csvFile.print(",");
-    csvFile.print(pitch, 2); csvFile.print(",");
-    csvFile.print(lat); csvFile.print(",");
-    csvFile.print(lon); csvFile.print(",");
-    csvFile.println(time); 
-
-    // 4. Affichage de progression tous les 10 000 points
-    count++;
-    if (count % 10000 == 0) {
-      Serial.print("Progression : ");
-      Serial.print((count * 100) / totalSamples);
-      Serial.println("%");
-    }
-  }
-
-  csvFile.close();
-  binFile.close();
-  Serial.println("Conversion terminée ! Fichier dataNode.csv prêt.");
-}
-
 void writeRegister(uint8_t reg, uint8_t value) {
   digitalWrite(ADXL_CS, LOW);
   SPI.transfer((reg << 1) | 0x00);
@@ -390,13 +314,6 @@ void loop() {
       }
 
     }
-  }
-
-  // Mode de traitement des données brutes
-  else if (currentMode == 2) {
-    if (file.isOpen()) file.close();
-    convertBinaryToCsv();
-    currentMode = 0; 
   }
 }
 
