@@ -18,7 +18,7 @@ UUID_MODE = "00002a5d-0000-1000-8000-00805f9b34fb"
 
 PRECISION_STABILITE = 1     # +/- exprimée en °
 
-BUFFER_SIZE = 200
+BUFFER_SIZE = 4000  # pour une frequence d'envoi de 4kHz
 x_data = deque([0.0]*BUFFER_SIZE, maxlen=BUFFER_SIZE)
 y_data = deque([0.0]*BUFFER_SIZE, maxlen=BUFFER_SIZE)
 z_data = deque([0.0]*BUFFER_SIZE, maxlen=BUFFER_SIZE)
@@ -62,7 +62,6 @@ async def run_ble():
             await asyncio.sleep(3)
             continue
 
-        
         try:
             client = BleakClient(device, disconnected_callback=on_disconnect)
             await client.connect()
@@ -97,15 +96,8 @@ async def run_ble():
 def on_disconnect(client):
     print("Déconnecté de la carte")
 
-def clear_buffers():
-    """Vide les deques pour repartir de zéro sur le graphe."""
-    x_data.clear(); y_data.clear(); z_data.clear()
-
-    for _ in range(BUFFER_SIZE):
-        x_data.append(0.0); y_data.append(0.0); z_data.append(0.0)
-
 def change_mode(label):
-    dict_modes = {"Temps Réel": 0, "Enregistrer SD": 1, "Conversion": 2}
+    dict_modes = {"Temps Réel": 0, "Enregistrer SD": 1}
     val = dict_modes[label]
         
     if client_global:
@@ -121,7 +113,7 @@ plt.subplots_adjust(left=0.25, hspace=0.4)
 
 # Boutons de mode 
 rax = plt.axes([0.02, 0.7, 0.15, 0.15], facecolor='#f0f0f0')
-radio = RadioButtons(rax, ('Temps Réel', 'Enregistrer SD', 'Conversion'))
+radio = RadioButtons(rax, ('Temps Réel', 'Enregistrer SD'))
 radio.on_clicked(change_mode)
 
 # Graphe des accélérations 
