@@ -2,70 +2,66 @@ import struct
 import csv
 import os
 import math
+import shutil
 
 # --- CONFIGURATION ---
-FILE_BIN = "dataRaw.bin"
-FILE_CSV = "dataNode.csv"
+SD_CARD_PATH = "D:/"
 
 # Facteur d'échelle pour l'ADXL355 (+/- 2g) : 256 000 LSB/g
 SCALE_FACTOR = 256000.0
+SAMPLE_SIZE = 16
 
-def convert_bin_to_csv():
-    if not os.path.exists(FILE_BIN):
-        print(f"Erreur : Le fichier {FILE_BIN} est introuvable.")
-        return
-
-    print(f"Ouverture de {FILE_BIN}...")
+def process_file(bin_path, csv_path):
+    """Effectue la conversion d'un fichier binaire unique en CSV."""
+    file_size = os.path.getsize(bin_path)
     
-    file_size = os.path.getsize(FILE_BIN)
+    # Valeurs par défaut si le header GPS est absent ou corrompu
+    lat, lon = "0.000000", "0.000000"
+    real_hours, real_minutes, real_seconds = 0, 0, 0
+    last_us = 0
 
-    # Taille d'un échantillon : 16 octets
-    sample_size = 16
-    
-    with open(FILE_BIN, "rb") as bin_file, open(FILE_CSV, "w", newline='') as csv_file:
+    with open(bin_path, "rb") as bin_file, open(csv_path, "w", newline='') as csv_file:
         writer = csv.writer(csv_file)
-
         writer.writerow(["Acc_X_g", "Acc_Y_g", "Acc_Z_g", "Roll", "Pitch", "Latitute", "Longitude", "Time"])
 
+        # Vérification du header GPS
         first_bytes = bin_file.peek(4)
         if first_bytes.startswith(b"GPS:"):
             gps_line = bin_file.readline().decode('utf-8').strip()
             parts = gps_line.replace("GPS:", "").split(",")
             if len(parts) >= 3:
                 lat, lon, time_raw = parts[0], parts[1], parts[2]
-            
-            hours, minutes, seconds = time_raw.split(':')
-            real_hours = int(hours)
-            real_minutes = int(minutes)
-            real_seconds = int(seconds)
-            last_us = 0
+                try:
+                    hours, minutes, seconds = time_raw.split(':')
+                    real_hours = int(hours)
+                    real_minutes = int(minutes)
+                    real_seconds = int(seconds)
+                except ValueError:
+                    print(f" -> Attention : Format de l'heure GPS invalide dans {os.path.basename(bin_path)}")
 
         # Lecture des données binaires
         count = 0
-        print("Conversion en cours...")
         
         while True:
             # Lire 16 octets (X, Y, Z) + microseconds
-            data = bin_file.read(sample_size)
-            if len(data) < sample_size:
+            data = bin_file.read(SAMPLE_SIZE)
+            if len(data) < SAMPLE_SIZE:
                 break 
 
-            # Dépaquetage du binaire : 
-            # '<' : petit-boutiste (little-endian, standard ESP32)
-            # 'iii' : trois entiers signés de 4 octets (int32_t)
             raw_x, raw_y, raw_z, offset_us = struct.unpack('<iiiI', data)
 
             # Conversion en 'g'
             ax = raw_x / SCALE_FACTOR
             ay = raw_y / SCALE_FACTOR
             az = raw_z / SCALE_FACTOR
-            pitch = math.atan2(-ax, math.sqrt(ay * ay + az * az)) * 180.0 / math.pi
-            roll = math.atan2(ay, az) * 180.0 / math.pi
-
-            # On ajoute l'offset en ajustant si les micros dépassent 1 000 000
+            try:
+                pitch = math.atan2(-ax, math.sqrt(ay * ay + az * az)) * 180.0 / math.pi
+                roll = math.atan2(ay, az) * 180.0 / math.pi
+            except ValueError:
+                pitch, roll = 0.0, 0.0
 
             real_us = offset_us % 1000000
-            
+
             if(last_us > real_us):
                 real_seconds += 1
 
@@ -81,18 +77,48 @@ def convert_bin_to_csv():
                 real_hours = 0
 
             timestamp = f"{real_hours:02d}:{real_minutes:02d}:{real_seconds:02d}.{real_us:06d}"
-
             last_us = real_us
 
             # Écriture dans le CSV
             writer.writerow([f"{ax:.3f}", f"{ay:.3f}", f"{az:.3f}", f"{roll:.2f}", f"{pitch:.2f}", lat, lon, timestamp])
             
             count += 1
-            if count % 40000 == 0: # Progression toutes les 10 secondes de données à 4kHz
+            if count % 80000 == 0: # Progression toutes les 20 secondes de données à 4kHz
                 progression = (bin_file.tell() / file_size) * 100
                 print(f"Progression : {progression:.1f}% ({count} échantillons)")
 
-    print(f"\nTerminé ! {count} échantillons convertis dans {FILE_CSV}.")
+
+def main():
+    os.makedirs("DATACSV", exist_ok=True)
+    os.makedirs("DATARAW", exist_ok=True)
+
+    # Recherche de tous les fichiers .bin à la racine du répertoire cible
+    all_files = os.listdir(SD_CARD_PATH)
+    bin_files = [f for f in all_files if f.lower().endswith('.bin') and os.path.isfile(os.path.join(SD_CARD_PATH, f))]
+
+    if not bin_files:
+        print("Aucun fichier binaire (.bin) trouvé dans la carte SD.")
+        return
+
+    for index, filename in enumerate(bin_files, start=1):
+        bin_path = os.path.join(SD_CARD_PATH, filename)
+        
+        # Génération du nom du fichier CSV correspondant
+        name_without_ext = os.path.splitext(filename)[0]
+        csv_filename = f"{name_without_ext}.csv"
+        csv_path = os.path.join("DATACSV", csv_filename)
+
+        print(f"[{index}/{len(bin_files)}] Traitement de : {filename}")
+        
+        try:
+            process_file(bin_path, csv_path)
+            dest_raw_path = os.path.join("DATARAW", filename)
+            shutil.move(bin_path, dest_raw_path)
+            
+        except Exception as e:
+            print(f" /!\\ Erreur lors du traitement de {filename} : {e}\n")
+
+    print("--- Opération de traitement par lots terminée ---")
 
 if __name__ == "__main__":
-    convert_bin_to_csv()
+    main()

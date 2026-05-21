@@ -275,10 +275,12 @@ void loop() {
     }
   }
 
+
   if (deviceConnected) {
       
       if(modeWritten){
         modeWritten = false;
+        pModeChar->setValue((uint8_t*) &currentMode, (size_t) sizeof(currentMode));
 
         if(currentMode == LIVE){
           Serial.println("Début du stream...");
@@ -306,7 +308,7 @@ void loop() {
             snprintf(minutes, sizeof(minutes), "%02d", gps.time.minute());
             snprintf(seconds, sizeof(seconds),"%02d", gps.time.second());
 
-            snprintf(title, sizeof(title), "dataRaw_%s_%s_%s_UTC.bin", hours, minutes, seconds);
+            snprintf(title, sizeof(title), "data_%s_%s_%s_UTC.bin", hours, minutes, seconds);
 
             if (!file.open(title, O_RDWR | O_CREAT | O_AT_END)) {
               Serial.println("Echec critique : impossible de créer dataRaw.bin");
@@ -342,7 +344,6 @@ void loop() {
 
           pRawDataChar->setValue(ptrBuf, 504);
           pRawDataChar->notify();
-          pModeChar->setValue((uint8_t*) &currentMode, (size_t) sizeof(currentMode));
       }
   }
 
@@ -357,8 +358,8 @@ void loop() {
 
   }
 
-  static bool wasConnected = false;
   // Gestion automatique de la reconnexion (Advertising)
+  static bool wasConnected = false;
   if (!deviceConnected && wasConnected) {
     delay(500); 
     NimBLEDevice::startAdvertising();
