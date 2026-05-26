@@ -4,6 +4,7 @@
 #include <TinyGPS++.h>
 #include <math.h>
 #include <stdlib.h>
+#include <map>
 
 // Paramétrage
 #define ADXL_CS 10
@@ -51,8 +52,7 @@ hw_timer_t * timer = NULL;
 volatile uint8_t currentMode = LIVE; 
 volatile uint32_t pps_micros = 0;
 float lastLat = 0, lastLon = 0;
-char hours[3], minutes[3], seconds[3];
-char title[25];
+char hours[3], minutes[3], seconds[3], title[25];
 
 // Adresses des registres
 const int REG_XDATA3 = 0x08;
@@ -68,7 +68,9 @@ NimBLECharacteristic* pRawDataChar = NULL;
 NimBLECharacteristic* pModeChar = NULL;
 
 volatile bool deviceConnected = false;
+bool wasConnected = false;
 volatile bool modeWritten = false;
+bool envoiInit = false;
 
 int32_t x_raw = 0;
 int32_t y_raw = 0;
@@ -76,11 +78,12 @@ int32_t z_raw = 0;
 
 SemaphoreHandle_t timerSemaphore;
 
-// --- GESTIONNAIRES DE CALLBACKS BLE ---
 class MyServerCallbacks: public NimBLEServerCallbacks {
   public:
     void onConnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo){
       deviceConnected = true;
+      // Paramètres : Handle, Min Interval, Max Interval, Latency, Timeout
+      pServer->updateConnParams(connInfo.getConnHandle(), 6, 12, 0, 400);
     }
     void onDisconnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo, int reason){
       deviceConnected = false;
@@ -189,10 +192,9 @@ void setup() {
   Serial1.begin(9600, SERIAL_8N1, D0, D1); // UART GPS
   delay(1000); 
 
-  // 4. Configurer la fréquence à 10 Hz (100ms entre chaque mesure)
+  // Configuration GPS de la fréquence à 10 Hz
   Serial1.println("$PMTK220,100*2F");
 
-  // Filtrage pour récupérer que l'heure et la position GPS
   Serial1.println("$PMTK314,0,1,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0*28");
 
   Serial.println("--- DEMARRAGE DU SYSTEME ---");
@@ -217,7 +219,7 @@ void setup() {
   timerSemaphore = xSemaphoreCreateBinary();
   xTaskCreatePinnedToCore(ADXL_Task, "ADXL_Task", 4096, NULL, 10, NULL, 1);
 
-  // --- CONFIGURATION BLE  ---
+  // Configuration BLE 
   NimBLEDevice::init("ADXL355Z");
   NimBLEDevice::setMTU(512); 
 
@@ -260,11 +262,17 @@ void setup() {
   pinMode(PPS_PIN, INPUT_PULLDOWN);
   attachInterrupt(digitalPinToInterrupt(PPS_PIN), PPS_handler, RISING);
 
+  if (!file.open("init.bin", O_RDWR | O_CREAT | O_AT_END)) {
+    Serial.println("Echec critique : impossible de créer le fichier binaire.");
+  }
+  file.remove();
+  file.close();
+
   Serial.println("Système prêt.");
 }
 
 void loop() {
-
+  
   while (Serial1.available() > 0) {
 
     if (gps.encode(Serial1.read())) {
@@ -277,74 +285,73 @@ void loop() {
 
 
   if (deviceConnected) {
+    
+    if(modeWritten){
+      modeWritten = false;
       
-      if(modeWritten){
-        modeWritten = false;
-        pModeChar->setValue((uint8_t*) &currentMode, (size_t) sizeof(currentMode));
+      pModeChar->setValue((uint8_t*) &currentMode, (size_t) sizeof(currentMode));
 
-        if(currentMode == LIVE){
-          Serial.println("Début du stream...");
+      timerAlarmDisable(timer);
 
-          if(file.isOpen()) file.close();
+      activeBuf = 0;
+      bufIdx = 0;
+      fullFlag = false;
 
-          // On vide les buffers pour stocker les nouvelles données
-          activeBuf = 0;
-          bufIdx = 0;
-          fullFlag = false;
-        }
-        
-        else if(currentMode == RECORD){
-  
-          Serial.println("Début du stockage des données...");
-          
-          // On vide les buffers pour stocker les nouvelles données
-          activeBuf = 0;
-          bufIdx = 0;
-          fullFlag = false;
+      if(currentMode == LIVE){
+        if(file.isOpen()) 
+          file.close();
 
-          if (!file.isOpen()) {
+        Serial.println("Début du stream...");
+      }
+      
+      else if(currentMode == RECORD){
 
-            snprintf(hours, sizeof(hours), "%02d", gps.time.hour());
-            snprintf(minutes, sizeof(minutes), "%02d", gps.time.minute());
-            snprintf(seconds, sizeof(seconds),"%02d", gps.time.second());
+        Serial.println("Début du stockage des données...");
 
-            snprintf(title, sizeof(title), "data_%s_%s_%s_UTC.bin", hours, minutes, seconds);
+        if (!file.isOpen()) {
 
-            if (!file.open(title, O_RDWR | O_CREAT | O_AT_END)) {
-              Serial.println("Echec critique : impossible de créer dataRaw.bin");
-            }
-            
-            else{
-              // On écrit une petite entête GPS au début du fichier
-              file.print("GPS:"); 
-              file.print(lastLat, 6); 
-              file.print(","); 
-              file.print(lastLon, 6);
-              file.print(",");
+          snprintf(hours, sizeof(hours), "%02d", gps.time.hour());
+          snprintf(minutes, sizeof(minutes), "%02d", gps.time.minute());
+          snprintf(seconds, sizeof(seconds),"%02d", gps.time.second());
 
-              file.print(hours);
-              file.print(':');
-              file.print(minutes);
-              file.print(':');
-              file.print(seconds);
-              
-              file.println(); 
-            }
+          snprintf(title, sizeof(title), "data_%s_%s_%s_UTC.bin", hours, minutes, seconds);
+
+          if (!file.open(title, O_RDWR | O_CREAT | O_AT_END)) {
+            Serial.println("Echec critique : impossible de créer le fichier binaire.");
           }
           
+          else{
+            // On écrit une petite entête GPS au début du fichier
+            file.print("GPS:"); 
+            file.print(lastLat, 6); 
+            file.print(","); 
+            file.print(lastLon, 6);
+            file.print(",");
+
+            file.print(hours);
+            file.print(':');
+            file.print(minutes);
+            file.print(':');
+            file.print(seconds);
+            
+            file.println(); 
+          }
         }
       }
 
-      // Mise à jour BLE
-      if(currentMode == LIVE && fullFlag){ 
-          int bufToSave = (activeBuf == 0) ? 2 : activeBuf - 1;
-          fullFlag = false;
-   
-          uint8_t* ptrBuf = (uint8_t*) bufferLIVE[bufToSave];
+      timerAlarmEnable(timer);
+    }
 
-          pRawDataChar->setValue(ptrBuf, 504);
-          pRawDataChar->notify();
-      }
+    // Mise à jour BLE
+    if(currentMode == LIVE && fullFlag){ 
+      int bufToSave = (activeBuf == 0) ? 2 : activeBuf - 1;
+      fullFlag = false;
+
+      uint8_t* ptrBuf = (uint8_t*) bufferLIVE[bufToSave];
+
+      pRawDataChar->setValue(ptrBuf, 504);
+      pRawDataChar->notify();
+    }
   }
 
   // Mode Enregistrement 
@@ -359,7 +366,6 @@ void loop() {
   }
 
   // Gestion automatique de la reconnexion (Advertising)
-  static bool wasConnected = false;
   if (!deviceConnected && wasConnected) {
     delay(500); 
     NimBLEDevice::startAdvertising();
