@@ -72,10 +72,10 @@ L'envoi en BLE se fait automatiquement et n'a pas besoin d'être paramétré. Su
 
 (Veuillez vous assurer de bien avoir activé le Bluetooth de l'ordinateur exécutant le code)
 
-Pour générer l'exécutable, il faut installer *pyinstaller*. Ensuite la ligne de commande est la suivante :
+Pour générer l'exécutable, il faut installer *pyinstaller*. Ensuite, la ligne de commande est la suivante :
 
     pyinstaller --onefile SERVEUR_ADXL.py
 
-Il faut s'assurer d'être dans le répertoire des fichiers SERVEUR_ADXL.py et CONVERSION_BIN_CSV.py pour que la commande fonctionne. Si vous voulez changer générer un exécutable avec un autre nom, il suffit de changer le nom du fichier python avant d'exécuter la ligne de commande.
+Il faut s'assurer d'être dans le répertoire des fichiers SERVEUR_ADXL.py et CONVERSION_BIN_CSV.py pour que la commande fonctionne. Si vous voulez changer un exécutable avec un autre nom, il suffit de changer le nom du fichier python avant d'exécuter la ligne de commande.
 
 Fait par : Adam Bounour
