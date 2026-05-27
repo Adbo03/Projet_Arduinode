@@ -21,6 +21,11 @@
 #define LIVE 0
 #define RECORD 1
 
+// Interval
+#define _2g 0
+#define _4g 1
+#define _8g 2
+
 // Bus SPI dédié pour communiquer avec le lecteur SD
 SPIClass sdSPI(HSPI);
 
@@ -50,26 +55,27 @@ TinyGPSPlus gps;
 hw_timer_t * timer = NULL;
 
 volatile uint8_t currentMode = LIVE; 
+volatile uint8_t currentRange = _2g;
 volatile uint32_t pps_micros = 0;
 float lastLat = 0, lastLon = 0;
 char hours[3], minutes[3], seconds[3], title[25];
+char interval[3];
 
 // Adresses des registres
 const int REG_XDATA3 = 0x08;
 const int REG_RANGE  = 0x2C;
 const int REG_POWER_CTL = 0x2D;
 
-// Facteur d'échelle (+/- 2g) : 256000 LSB/g
-const float SCALE_FACTOR = 256000.0;
-
 // Objets et pointeurs BLE 
 NimBLEServer* pServer = NULL;
 NimBLECharacteristic* pRawDataChar = NULL;
 NimBLECharacteristic* pModeChar = NULL;
+NimBLECharacteristic* pRangeChar = NULL;
 
 volatile bool deviceConnected = false;
 bool wasConnected = false;
 volatile bool modeWritten = false;
+volatile bool rangeWritten = false;
 bool envoiInit = false;
 
 int32_t x_raw = 0;
@@ -95,8 +101,35 @@ class ModeCallbacks: public NimBLECharacteristicCallbacks {
       void onWrite(NimBLECharacteristic* pCharacteristic, NimBLEConnInfo& connInfo) {
         std::string value = pCharacteristic->getValue();
         if (value.length() > 0) {
-          currentMode = (uint8_t)value[0];
-          modeWritten = true;
+      
+          if(currentMode != (uint8_t)value[0]){
+            currentMode = (uint8_t)value[0];
+            modeWritten = true;
+          }
+
+          else{
+            modeWritten = false;
+          }
+
+        }
+      }
+};
+
+class RangeCallbacks: public NimBLECharacteristicCallbacks {
+    public:
+      void onWrite(NimBLECharacteristic* pCharacteristic, NimBLEConnInfo& connInfo) {
+        std::string value = pCharacteristic->getValue();
+        if (value.length() > 0) {
+
+          if(currentRange != (uint8_t)value[0]){
+            currentRange = (uint8_t)value[0];
+            rangeWritten = true;
+          }
+
+          else{
+            rangeWritten = false;
+          }
+
         }
       }
 };
@@ -237,7 +270,14 @@ void setup() {
                 "19b10002-e8f2-537e-4f6c-d104768a1214",
                 NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE
               );
+  
+  pRangeChar = pService->createCharacteristic(
+                "19b10003-e8f2-537e-4f6c-d104768a1214",
+                NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE
+              );
+
   pModeChar->setCallbacks(new ModeCallbacks());
+  pRangeChar->setCallbacks(new RangeCallbacks());
 
   pService->start();
 
@@ -314,14 +354,18 @@ void loop() {
           snprintf(minutes, sizeof(minutes), "%02d", gps.time.minute());
           snprintf(seconds, sizeof(seconds),"%02d", gps.time.second());
 
-          snprintf(title, sizeof(title), "data_%s_%s_%s_UTC.bin", hours, minutes, seconds);
+          if(currentRange == _2g) sprintf(interval, "2g");
+          else if(currentRange == _4g) sprintf(interval, "4g");
+          else if(currentRange == _8g) sprintf(interval, "8g");
+
+          snprintf(title, sizeof(title), "data_%s_%s_%s_UTC_%s.bin", hours, minutes, seconds, interval);
 
           if (!file.open(title, O_RDWR | O_CREAT | O_AT_END)) {
             Serial.println("Echec critique : impossible de créer le fichier binaire.");
           }
           
           else{
-            // On écrit une petite entête GPS au début du fichier
+          
             file.print("GPS:"); 
             file.print(lastLat, 6); 
             file.print(","); 
@@ -333,12 +377,84 @@ void loop() {
             file.print(minutes);
             file.print(':');
             file.print(seconds);
+            file.print(",");
+
+            file.print(interval);
             
             file.println(); 
           }
         }
       }
 
+      timerAlarmEnable(timer);
+    }
+
+    if(rangeWritten){
+      rangeWritten = false;
+      
+      pRangeChar->setValue((uint8_t*) &currentRange, (size_t) sizeof(currentRange));
+
+      timerAlarmDisable(timer);
+
+      if(currentRange == _2g){
+        writeRegister(REG_POWER_CTL, 0x01);
+        writeRegister(REG_RANGE, 0x01); 
+        writeRegister(REG_POWER_CTL, 0x00);
+      }
+
+      else if(currentRange == _4g){
+        writeRegister(REG_POWER_CTL, 0x01);
+        writeRegister(REG_RANGE, 0x02); 
+        writeRegister(REG_POWER_CTL, 0x00);
+      }
+
+      else if(currentRange == _8g){
+        writeRegister(REG_POWER_CTL, 0x01);
+        writeRegister(REG_RANGE, 0x03); 
+        writeRegister(REG_POWER_CTL, 0x00);
+      }
+
+      if(currentMode == RECORD){
+
+        // Ouverture d'un nouveau fichier pour ne pas mélanger les intervalles de mesures
+        if(file.isOpen()) file.close();
+
+        snprintf(hours, sizeof(hours), "%02d", gps.time.hour());
+        snprintf(minutes, sizeof(minutes), "%02d", gps.time.minute());
+        snprintf(seconds, sizeof(seconds),"%02d", gps.time.second());
+
+        if(currentRange == _2g) sprintf(interval, "2g");
+        else if(currentRange == _4g) sprintf(interval, "4g");
+        else if(currentRange == _8g) sprintf(interval, "8g");
+
+        snprintf(title, sizeof(title), "data_%s_%s_%s_UTC_%s.bin", hours, minutes, seconds, interval);
+
+        if (!file.open(title, O_RDWR | O_CREAT | O_AT_END)) {
+          Serial.println("Echec critique : impossible de créer le fichier binaire.");
+        }
+        
+        else{
+    
+          file.print("GPS:"); 
+          file.print(lastLat, 6); 
+          file.print(","); 
+          file.print(lastLon, 6);
+          file.print(",");
+
+          file.print(hours);
+          file.print(':');
+          file.print(minutes);
+          file.print(':');
+          file.print(seconds);
+          file.print(",");
+
+          file.print(interval);
+          
+          file.println(); 
+        }
+        
+      }
+      
       timerAlarmEnable(timer);
     }
 
@@ -375,4 +491,3 @@ void loop() {
     wasConnected = true;
   }
 }
-
