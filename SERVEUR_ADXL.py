@@ -153,7 +153,7 @@ def change_range(label):
         )
 
 def change_frequency(label):
-    global WINDOW_SIZE, x_data, y_data, z_data
+    global WINDOW_SIZE, x_data, y_data, z_data, time_axis
 
     dict_modes = {"4000 Hz": 0, "2000 Hz": 1, "1000 Hz": 2, "500 Hz": 3}
     val = dict_modes[label]
@@ -173,16 +173,7 @@ def change_frequency(label):
     y_data = deque([0.0] * max(0, new_size - len(old_y)) + old_y[-new_size:], maxlen=new_size)
     z_data = deque([0.0] * max(0, new_size - len(old_z)) + old_z[-new_size:], maxlen=new_size)
 
-    line_x.set_visible(False)
-    line_y.set_visible(False)
-    line_z.set_visible(False)
-
-    ax1.set_xlim(0, WINDOW_SIZE)
-    fig.canvas.draw()
-
-    line_x.set_visible(True)
-    line_y.set_visible(True)
-    line_z.set_visible(True)
+    time_axis = [i/WINDOW_SIZE for i in range(WINDOW_SIZE)]
 
 def change_save(label):
     global SAVE_MODE
@@ -246,13 +237,13 @@ btnExtract.on_clicked(launch_extraction)
 
 # Graphe des accélérations 
 ax1.set_title("Accélération (g)")
-ax1.set_xlabel("Echantillons")
+ax1.set_xlabel("Temps (s)")
 ax1.set_ylim(-8.5, 8.5)   
 ax1.yaxis.set_major_locator(ticker.MultipleLocator(1)) 
-ax1.set_xlim(0, WINDOW_SIZE)
-line_x, = ax1.plot(x_data, label='X', color='red')
-line_y, = ax1.plot(y_data, label='Y', color='green')
-line_z, = ax1.plot(z_data, label='Z', color='blue')
+time_axis = [i/WINDOW_SIZE for i in range(WINDOW_SIZE)]
+line_x, = ax1.plot(time_axis, x_data, label='X', color='red')
+line_y, = ax1.plot(time_axis, y_data, label='Y', color='green')
+line_z, = ax1.plot(time_axis, z_data, label='Z', color='blue')
 ax1.legend(loc='upper right', fontsize='small')
 
 props = dict(boxstyle='round', facecolor="#fefefe")
@@ -268,10 +259,9 @@ def update_plot(frame):
     """Mise à jour périodique des courbes avec le contenu actuel du buffer."""
     global latest_pitch, latest_roll
 
-    x_axis = range(WINDOW_SIZE)
-    line_x.set_data(x_axis, list(x_data.copy()))
-    line_y.set_data(x_axis, list(y_data.copy()))
-    line_z.set_data(x_axis, list(z_data.copy()))
+    line_x.set_data(time_axis, list(x_data.copy()))
+    line_y.set_data(time_axis, list(y_data.copy()))
+    line_z.set_data(time_axis, list(z_data.copy()))
     text_pitch.set_text(f"Rotation Y : {latest_pitch:>.2f}°")
     text_roll.set_text(f"Rotation X : {latest_roll:>.2f}°")
     
