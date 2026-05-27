@@ -7,8 +7,6 @@ import shutil
 # --- CONFIGURATION ---
 SD_CARD_PATH = "D:/"
 
-# Facteur d'échelle pour l'ADXL355 (+/- 2g) : 256 000 LSB/g
-SCALE_FACTOR = 256000.0
 SAMPLE_SIZE = 16
 
 def process_file(bin_path, csv_path):
@@ -17,6 +15,7 @@ def process_file(bin_path, csv_path):
     
     # Valeurs par défaut si le header GPS est absent ou corrompu
     lat, lon = "0.000000", "0.000000"
+    range = ""
     real_hours, real_minutes, real_seconds = 0, 0, 0
     last_us = 0
 
@@ -29,8 +28,8 @@ def process_file(bin_path, csv_path):
         if first_bytes.startswith(b"GPS:"):
             gps_line = bin_file.readline().decode('utf-8').strip()
             parts = gps_line.replace("GPS:", "").split(",")
-            if len(parts) >= 3:
-                lat, lon, time_raw = parts[0], parts[1], parts[2]
+            if len(parts) >= 4:
+                lat, lon, time_raw, range = parts[0], parts[1], parts[2], parts[3]
                 try:
                     hours, minutes, seconds = time_raw.split(':')
                     real_hours = int(hours)
@@ -51,6 +50,15 @@ def process_file(bin_path, csv_path):
             raw_x, raw_y, raw_z, offset_us = struct.unpack('<iiiI', data)
 
             # Conversion en 'g'
+            if range == "2g":
+                SCALE_FACTOR = 256000.0
+            
+            elif range == "4g":
+                SCALE_FACTOR = 128000.0
+
+            elif range == "8g":
+                SCALE_FACTOR = 64000.0
+
             ax = raw_x / SCALE_FACTOR
             ay = raw_y / SCALE_FACTOR
             az = raw_z / SCALE_FACTOR
@@ -88,9 +96,12 @@ def process_file(bin_path, csv_path):
                 print(f"Progression : {progression:.1f}% ({count} échantillons)")
 
 
-def main():
-    os.makedirs("DATACSV", exist_ok=True)
-    os.makedirs("DATARAW", exist_ok=True)
+def process_batch(save_mode="CSV"):
+    
+    if save_mode in ["CSV", "CSV + BIN"]:
+        os.makedirs("DATACSV", exist_ok=True)
+    if save_mode in ["BIN", "CSV + BIN"]:
+        os.makedirs("DATARAW", exist_ok=True)
 
     # Recherche de tous les fichiers .bin à la racine du répertoire cible
     all_files = os.listdir(SD_CARD_PATH)
@@ -107,18 +118,26 @@ def main():
         name_without_ext = os.path.splitext(filename)[0]
         csv_filename = f"{name_without_ext}.csv"
         csv_path = os.path.join("DATACSV", csv_filename)
+        dest_raw_path = os.path.join("DATARAW", filename)
 
         print(f"[{index}/{len(bin_files)}] Traitement de : {filename}")
         
         try:
-            process_file(bin_path, csv_path)
-            dest_raw_path = os.path.join("DATARAW", filename)
-            shutil.move(bin_path, dest_raw_path)
-            
+            if save_mode == "CSV":
+                process_file(bin_path, csv_path)
+                os.remove(bin_path)
+
+            elif save_mode == "BIN":
+                shutil.move(bin_path, dest_raw_path)
+
+            elif save_mode == "CSV + BIN":
+                process_file(bin_path, csv_path)
+                shutil.move(bin_path, dest_raw_path)
+
         except Exception as e:
             print(f" /!\\ Erreur lors du traitement de {filename} : {e}\n")
 
     print("--- Opération de traitement par lots terminée ---")
 
 if __name__ == "__main__":
-    main()
+    process_batch()
