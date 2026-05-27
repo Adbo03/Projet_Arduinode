@@ -15,6 +15,7 @@ DEVICE_NAME = "ADXL355Z"
 UUID_RAWDATA = "19b10001-e8f2-537e-4f6c-d104768a1214"
 UUID_MODE = "19b10002-e8f2-537e-4f6c-d104768a1214"
 UUID_RANGE = "19b10003-e8f2-537e-4f6c-d104768a1214"
+UUID_FREQUENCY = "19b10004-e8f2-537e-4f6c-d104768a1214"
 
 PRECISION_STABILITE = 1     # +/- exprimée en °
 SCALE_FACTORS = [256000.0, 128000.0, 64000.0]
@@ -146,6 +147,16 @@ def change_range(label):
             ble_loop
         )
 
+def change_frequency(label):
+    dict_modes = {"4000 Hz": 0, "2000 Hz": 1, "1000 Hz": 2, "500 Hz": 3}
+    val = dict_modes[label]
+
+    if client_global:
+        asyncio.run_coroutine_threadsafe(
+            client_global.write_gatt_char(UUID_FREQUENCY, bytearray([val]), response=False), 
+            ble_loop
+        )
+
 def change_save(label):
     global SAVE_MODE
     SAVE_MODE = label
@@ -179,8 +190,9 @@ raxRange = plt.axes([0.02, 0.63, 0.15, 0.12], facecolor = "#babebe", title="Inte
 radioRange = RadioButtons(raxRange, ('2g', '4g', '8g'))
 radioRange.on_clicked(change_range)
 
-raxFrequence = plt.axes([0.02, 0.44, 0.15, 0.12], facecolor = "#babebe", title="Frequence")
-radioFrequence = RadioButtons(raxFrequence, ('4000 Hz', '2000 Hz', '1000 Hz', '500 Hz'))
+raxFrequency = plt.axes([0.02, 0.44, 0.15, 0.12], facecolor = "#babebe", title="Frequence")
+radioFrequency = RadioButtons(raxFrequency, ('4000 Hz', '2000 Hz', '1000 Hz', '500 Hz'))
+radioFrequency.on_clicked(change_frequency)
 
 raxSave = plt.axes([0.02, 0.25, 0.15, 0.12], facecolor = "#babebe", title="Sauvegarde PC")
 radioSave = RadioButtons(raxSave, ('CSV', 'BIN', 'CSV + BIN'))

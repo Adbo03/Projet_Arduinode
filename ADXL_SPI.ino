@@ -13,8 +13,6 @@
 #define MOSI_SD 23
 #define MISO_SD 21
 
-#define ODR_FREQUENCY 4000 // 4kHz
-#define TICK_US 1000000 / ODR_FREQUENCY
 #define PPS_PIN 2
 
 // Modes
@@ -25,6 +23,12 @@
 #define _2g 0
 #define _4g 1
 #define _8g 2
+
+// Sampling frequency
+#define _4000Hz 0
+#define _2000Hz 1
+#define _1000Hz 2
+#define _500Hz 3
 
 // Bus SPI dédié pour communiquer avec le lecteur SD
 SPIClass sdSPI(HSPI);
@@ -54,8 +58,13 @@ SdFile file;
 TinyGPSPlus gps;
 hw_timer_t * timer = NULL;
 
+const int tabHz[4] = {4000, 2000, 1000, 500};
 volatile uint8_t currentMode = LIVE; 
 volatile uint8_t currentRange = _2g;
+volatile uint8_t currentFreq = _4000Hz;
+
+volatile int32_t TICK_US = 1000000/tabHz[currentFreq];
+
 volatile uint32_t pps_micros = 0;
 float lastLat = 0, lastLon = 0;
 char hours[3], minutes[3], seconds[3], title[25];
@@ -65,17 +74,20 @@ char interval[3];
 const int REG_XDATA3 = 0x08;
 const int REG_RANGE  = 0x2C;
 const int REG_POWER_CTL = 0x2D;
+const int REG_FILTER = 0x28;
 
 // Objets et pointeurs BLE 
 NimBLEServer* pServer = NULL;
 NimBLECharacteristic* pRawDataChar = NULL;
 NimBLECharacteristic* pModeChar = NULL;
 NimBLECharacteristic* pRangeChar = NULL;
+NimBLECharacteristic* pFrequencyChar = NULL;
 
 volatile bool deviceConnected = false;
 bool wasConnected = false;
 volatile bool modeWritten = false;
 volatile bool rangeWritten = false;
+volatile bool freqWritten = false;
 bool envoiInit = false;
 
 int32_t x_raw = 0;
@@ -128,6 +140,25 @@ class RangeCallbacks: public NimBLECharacteristicCallbacks {
 
           else{
             rangeWritten = false;
+          }
+
+        }
+      }
+};
+
+class FreqCallbacks: public NimBLECharacteristicCallbacks {
+    public:
+      void onWrite(NimBLECharacteristic* pCharacteristic, NimBLEConnInfo& connInfo) {
+        std::string value = pCharacteristic->getValue();
+        if (value.length() > 0) {
+      
+          if(currentFreq != (uint8_t)value[0]){
+            currentFreq = (uint8_t)value[0];
+            freqWritten = true;
+          }
+
+          else{
+            freqWritten = false;
           }
 
         }
@@ -196,7 +227,8 @@ void ADXL_Task(void * pvParameters) {
         bufferLIVE[activeBuf][bufIdx] = {x_raw, y_raw, z_raw};
         bufIdx++;
 
-        if (bufIdx >= BUF_SIZE_LIVE) {
+        // taille du paquet proportionnel à la fréquence
+        if (bufIdx >= (BUF_SIZE_LIVE / pow(2,currentFreq))) {
           bufIdx = 0;
           activeBuf = (activeBuf + 1) % 3;
           fullFlag = true;
@@ -276,8 +308,14 @@ void setup() {
                 NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE
               );
 
+  pFrequencyChar = pService->createCharacteristic(
+                "19b10004-e8f2-537e-4f6c-d104768a1214",
+                NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE
+              );
+
   pModeChar->setCallbacks(new ModeCallbacks());
   pRangeChar->setCallbacks(new RangeCallbacks());
+  pFrequencyChar->setCallbacks(new FreqCallbacks());
 
   pService->start();
 
@@ -458,6 +496,43 @@ void loop() {
       timerAlarmEnable(timer);
     }
 
+    if(freqWritten){
+      freqWritten = false;
+      
+      pFrequencyChar->setValue((uint8_t*) &currentFreq, (size_t) sizeof(currentFreq));
+
+      timerAlarmDisable(timer);
+
+      if(currentFreq == _4000Hz){
+        writeRegister(REG_POWER_CTL, 0x01);
+        writeRegister(REG_FILTER, 0x00); 
+        writeRegister(REG_POWER_CTL, 0x00);
+      }
+
+      else if(currentFreq == _2000Hz){
+        writeRegister(REG_POWER_CTL, 0x01);
+        writeRegister(REG_FILTER, 0x01); 
+        writeRegister(REG_POWER_CTL, 0x00);
+      }
+
+      else if(currentFreq == _1000Hz){
+        writeRegister(REG_POWER_CTL, 0x01);
+        writeRegister(REG_FILTER, 0x02); 
+        writeRegister(REG_POWER_CTL, 0x00);
+      }
+
+      else if(currentFreq == _500Hz){
+        writeRegister(REG_POWER_CTL, 0x01);
+        writeRegister(REG_FILTER, 0x03); 
+        writeRegister(REG_POWER_CTL, 0x00);
+      }
+
+      TICK_US = 1000000/tabHz[currentFreq];
+
+      timerAlarmWrite(timer, TICK_US, true);
+      timerAlarmEnable(timer);
+    }
+
     // Mise à jour BLE
     if(currentMode == LIVE && fullFlag){ 
       int bufToSave = (activeBuf == 0) ? 2 : activeBuf - 1;
@@ -465,7 +540,7 @@ void loop() {
 
       uint8_t* ptrBuf = (uint8_t*) bufferLIVE[bufToSave];
 
-      pRawDataChar->setValue(ptrBuf, 504);
+      pRawDataChar->setValue(ptrBuf, (BUF_SIZE_LIVE / pow(2,currentFreq))*12);
       pRawDataChar->notify();
     }
   }
@@ -491,3 +566,4 @@ void loop() {
     wasConnected = true;
   }
 }
+
