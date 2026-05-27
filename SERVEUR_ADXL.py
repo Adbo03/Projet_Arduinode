@@ -24,6 +24,10 @@ WINDOW_SIZE = 4000
 SAVE_MODE = "CSV"
 BLE_ENABLE = True
 
+needs_ui_sync = False
+ble_initial_state = {'mode': 0, 'range': 0, 'freq': 0}
+block_ble_writes = False
+
 x_data = deque([0.0]*WINDOW_SIZE, maxlen=WINDOW_SIZE)
 y_data = deque([0.0]*WINDOW_SIZE, maxlen=WINDOW_SIZE)
 z_data = deque([0.0]*WINDOW_SIZE, maxlen=WINDOW_SIZE)
@@ -98,6 +102,23 @@ async def run_ble():
             client_global = client
 
             print("Connecté au BLE !")
+
+            try:
+                mode_bytes = await client.read_gatt_char(UUID_MODE)
+                range_bytes = await client.read_gatt_char(UUID_RANGE)
+                freq_bytes = await client.read_gatt_char(UUID_FREQUENCY)
+
+                global ble_initial_state, needs_ui_sync
+                ble_initial_state = {
+                    'mode': mode_bytes[0],
+                    'range': range_bytes[0],
+                    'freq': freq_bytes[0]
+                }
+
+                needs_ui_sync = True
+
+            except Exception as read_error:
+                print("Échec de la lecture initiale des configurations :", read_error)
             
             if BLE_ENABLE:
                 print("Démarrage du flux de données...")
@@ -133,7 +154,7 @@ def change_mode(label):
     dict_modes = {"Temps Réel": 0, "Enregistrer SD": 1}
     val = dict_modes[label]
         
-    if client_global:
+    if client_global and not block_ble_writes:
         asyncio.run_coroutine_threadsafe(
             client_global.write_gatt_char(UUID_MODE, bytearray([val]), response=False), 
             ble_loop
@@ -146,7 +167,7 @@ def change_range(label):
     val = dict_modes[label]
     RANGE = val
 
-    if client_global:
+    if client_global and not block_ble_writes:
         asyncio.run_coroutine_threadsafe(
             client_global.write_gatt_char(UUID_RANGE, bytearray([val]), response=False), 
             ble_loop
@@ -158,7 +179,7 @@ def change_frequency(label):
     dict_modes = {"4000 Hz": 0, "2000 Hz": 1, "1000 Hz": 2, "500 Hz": 3}
     val = dict_modes[label]
 
-    if client_global:
+    if client_global and not block_ble_writes:
         asyncio.run_coroutine_threadsafe(
             client_global.write_gatt_char(UUID_FREQUENCY, bytearray([val]), response=False), 
             ble_loop
@@ -257,7 +278,19 @@ text_roll  = ax2.text(0.1, 0.5, "Rotation X : 0.00°", fontsize=14, verticalalig
 
 def update_plot(frame):
     """Mise à jour périodique des courbes avec le contenu actuel du buffer."""
-    global latest_pitch, latest_roll
+    global latest_pitch, latest_roll, needs_ui_sync, block_ble_writes
+
+    if needs_ui_sync:
+        needs_ui_sync = False
+        block_ble_writes = True  # Bloque l'envoi d'ordres BLE pendant la mise à jour de l'IHM
+        try:
+            radioMode.set_active(ble_initial_state['mode'])
+            radioRange.set_active(ble_initial_state['range'])
+            radioFrequency.set_active(ble_initial_state['freq'])
+            print("IHM synchronisée avec le statut de la carte !")
+        except Exception as e:
+            print("Erreur lors de la synchronisation visuelle :", e)
+        block_ble_writes = False
 
     line_x.set_data(time_axis, list(x_data.copy()))
     line_y.set_data(time_axis, list(y_data.copy()))
