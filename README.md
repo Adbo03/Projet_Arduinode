@@ -14,6 +14,8 @@ stockage de données, et une batterie Li-ion pour l’alimentation.
 - **ADXL_I2C.ino** : permet la collecte de données d'un ADXL355Z sur ces 3 axes (X, Y, Z). Ces données sont ensuite formatées et peuvent être affichées sur le serial monitor de l'IDE arduino ET/OU sur une application BLE sur différents type d'appareils (ex : "nRF Connect" sur IOS).
 - **ADXL_SPI.ino** : équivalent à ADXL_I2C.ino mais pour le protocole SPI (+ données sur l'inclinaison de l'accéléromètre).
 - **SERVEUR_ADXL.py** : code serveur qui permet de se connecter en BLE à la carte arduino et d'afficher en temps réel les données sur les 3 axes ainsi que l'inclinaison (Axe X/ Axe Y) de l'ADXL.
+- **CONVERSION_BIN_CSV.py** : code permettant la conversion des fichiers binaires en csv et le stockage sur le PC.
+- **ScanEarth.exe** : exécutable facilitant le lancement de l'interface pour la visualisation de données et le paramétrage de l'accéléromètre.
 
 
 **CONSEILS D'UTILISATION**
