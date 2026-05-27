@@ -20,7 +20,7 @@ UUID_FREQUENCY = "19b10004-e8f2-537e-4f6c-d104768a1214"
 PRECISION_STABILITE = 1     # +/- exprimée en °
 SCALE_FACTORS = [256000.0, 128000.0, 64000.0]
 RANGE = 0
-WINDOW_SIZE = 3000
+WINDOW_SIZE = 4000
 SAVE_MODE = "CSV"
 BLE_ENABLE = True
 
@@ -29,6 +29,7 @@ y_data = deque([0.0]*WINDOW_SIZE, maxlen=WINDOW_SIZE)
 z_data = deque([0.0]*WINDOW_SIZE, maxlen=WINDOW_SIZE)
 latest_pitch = 0.0
 latest_roll = 0.0
+
 
 client_global = None
 ble_loop = None
@@ -152,6 +153,8 @@ def change_range(label):
         )
 
 def change_frequency(label):
+    global WINDOW_SIZE, x_data, y_data, z_data
+
     dict_modes = {"4000 Hz": 0, "2000 Hz": 1, "1000 Hz": 2, "500 Hz": 3}
     val = dict_modes[label]
 
@@ -160,6 +163,26 @@ def change_frequency(label):
             client_global.write_gatt_char(UUID_FREQUENCY, bytearray([val]), response=False), 
             ble_loop
         )
+
+    new_size = int(label.split()[0])
+    WINDOW_SIZE = new_size
+
+    old_x, old_y, old_z = list(x_data), list(y_data), list(z_data)
+
+    x_data = deque([0.0] * max(0, new_size - len(old_x)) + old_x[-new_size:], maxlen=new_size)
+    y_data = deque([0.0] * max(0, new_size - len(old_y)) + old_y[-new_size:], maxlen=new_size)
+    z_data = deque([0.0] * max(0, new_size - len(old_z)) + old_z[-new_size:], maxlen=new_size)
+
+    line_x.set_visible(False)
+    line_y.set_visible(False)
+    line_z.set_visible(False)
+
+    ax1.set_xlim(0, WINDOW_SIZE)
+    fig.canvas.draw()
+
+    line_x.set_visible(True)
+    line_y.set_visible(True)
+    line_z.set_visible(True)
 
 def change_save(label):
     global SAVE_MODE
@@ -243,11 +266,12 @@ text_roll  = ax2.text(0.1, 0.5, "Rotation X : 0.00°", fontsize=14, verticalalig
 
 def update_plot(frame):
     """Mise à jour périodique des courbes avec le contenu actuel du buffer."""
-    global latest_pitch, latest_roll, ax1
+    global latest_pitch, latest_roll
 
-    line_x.set_ydata(list(x_data.copy()))
-    line_y.set_ydata(list(y_data.copy()))
-    line_z.set_ydata(list(z_data.copy()))
+    x_axis = range(WINDOW_SIZE)
+    line_x.set_data(x_axis, list(x_data.copy()))
+    line_y.set_data(x_axis, list(y_data.copy()))
+    line_z.set_data(x_axis, list(z_data.copy()))
     text_pitch.set_text(f"Rotation Y : {latest_pitch:>.2f}°")
     text_roll.set_text(f"Rotation X : {latest_roll:>.2f}°")
     
