@@ -96,9 +96,13 @@ async def run_ble():
             await client.connect()
             client_global = client
 
-            print("Connecté au BLE ! Démarrage du flux de données...")
-
-            await client.start_notify(UUID_RAWDATA, notification_handler)
+            print("Connecté au BLE !")
+            
+            if BLE_ENABLE:
+                print("Démarrage du flux de données...")
+                await client.start_notify(UUID_RAWDATA, notification_handler)
+            else:
+                print("Connexion établie, mais communication en pause.")
             
             while client.is_connected and ble_running:
                 await asyncio.sleep(1)
@@ -165,10 +169,25 @@ def change_ble_state(label):
     global BLE_ENABLE
     BLE_ENABLE = (label == 'Activer')
 
-    if BLE_ENABLE:
-        print("\nRecherche Bluetooth relancée...\n")
+    if client_global and client_global.is_connected:
+        if BLE_ENABLE:
+            print("\nReprise de la communication (Lecture)...\n")
+            asyncio.run_coroutine_threadsafe(
+                client_global.start_notify(UUID_RAWDATA, notification_handler), 
+                ble_loop
+            )
+        else:
+            print("\nCommunication en pause (Stop)...\n")
+            asyncio.run_coroutine_threadsafe(
+                client_global.stop_notify(UUID_RAWDATA), 
+                ble_loop
+            )
+
     else:
-        print("\nBluetooth désactivé. Déconnexion en cours...\n")
+        if BLE_ENABLE:
+            print("\nRecherche Bluetooth relancée...\n")
+        else:
+            print("\nBluetooth désactivé. Déconnexion en cours...\n")
 
 def launch_extraction(event):
     process_batch(SAVE_MODE)
