@@ -20,6 +20,7 @@ UUID_FREQUENCY = "19b10004-e8f2-537e-4f6c-d104768a1214"
 PRECISION_STABILITE = 1     # +/- exprimée en °
 SCALE_FACTORS = [256000.0, 128000.0, 64000.0]
 RANGE = 0
+FREQUENCY = 0
 WINDOW_SIZE = 4000
 SAVE_MODE = "CSV"
 BLE_ENABLE = True
@@ -27,6 +28,8 @@ BLE_ENABLE = True
 needs_ui_sync = False
 ble_initial_state = {'mode': 0, 'range': 0, 'freq': 0}
 block_ble_writes = False
+is_recording = False
+ignore_ui_events = False 
 
 x_data = deque([0.0]*WINDOW_SIZE, maxlen=WINDOW_SIZE)
 y_data = deque([0.0]*WINDOW_SIZE, maxlen=WINDOW_SIZE)
@@ -78,7 +81,7 @@ def notification_handler(sender, data):
             pass
 
 async def run_ble():
-    global client_global, ble_running, BLE_ENABLE
+    global client_global, ble_running, btnRecord, BLE_ENABLE
 
     while ble_running:
 
@@ -150,21 +153,23 @@ async def run_ble():
 def on_disconnect(client):
     print("Déconnecté de la carte")
 
-def change_mode(label):
-    dict_modes = {"Temps Réel": 0, "Enregistrer SD": 1}
-    val = dict_modes[label]
-        
-    if client_global and not block_ble_writes:
-        asyncio.run_coroutine_threadsafe(
-            client_global.write_gatt_char(UUID_MODE, bytearray([val]), response=False), 
-            ble_loop
-        )
-
 def change_range(label):
-    global RANGE
+    global RANGE, block_ble_writes, ignore_ui_events
 
+    if ignore_ui_events:
+        return
+    
     dict_modes = {"2g": 0, "4g": 1, "8g": 2}
     val = dict_modes[label]
+
+    if is_recording:
+        if val != RANGE:
+            old_block = block_ble_writes
+            block_ble_writes = True
+            radioRange.set_active(RANGE) 
+            block_ble_writes = old_block
+        return
+    
     RANGE = val
 
     if client_global and not block_ble_writes:
@@ -174,10 +179,34 @@ def change_range(label):
         )
 
 def change_frequency(label):
-    global WINDOW_SIZE, x_data, y_data, z_data, time_axis
+    global WINDOW_SIZE, FREQUENCY, x_data, y_data, z_data, time_axis, ignore_ui_events, block_ble_writes
 
-    dict_modes = {"4000 Hz": 0, "2000 Hz": 1, "1000 Hz": 2, "500 Hz": 3}
+    if ignore_ui_events:
+        return
+    
+    dict_modes = {"4000 Hz": 0, 
+                  "2000 Hz": 1, 
+                  "1000 Hz": 2, 
+                  "500 Hz": 3, 
+                  "250 Hz": 4, 
+                  "125 Hz": 5, 
+                  "62.5 Hz": 6, 
+                  "31.25 Hz": 7, 
+                  "15.625 Hz": 8, 
+                  "7.813 Hz": 9, 
+                  "3.906 Hz": 10}
+    
     val = dict_modes[label]
+
+    if is_recording:
+        if val != FREQUENCY:
+            old_block = block_ble_writes
+            block_ble_writes = True
+            radioFrequency.set_active(FREQUENCY) # Force le retour à l'ancienne valeur
+            block_ble_writes = old_block
+        return
+
+    FREQUENCY = val 
 
     if client_global and not block_ble_writes:
         asyncio.run_coroutine_threadsafe(
@@ -185,7 +214,13 @@ def change_frequency(label):
             ble_loop
         )
 
-    new_size = int(label.split()[0])
+    if val >= 6:
+        new_size = float(label.split()[0])
+        new_size = int(new_size)
+    
+    else:
+        new_size = int(label.split()[0])
+
     WINDOW_SIZE = new_size
 
     old_x, old_y, old_z = list(x_data), list(y_data), list(z_data)
@@ -224,6 +259,43 @@ def change_ble_state(label):
         else:
             print("\nBluetooth désactivé. Déconnexion en cours...\n")
 
+def toggle_recording(event):
+    global btnRecord, is_recording
+
+    if not is_recording:
+        is_recording = True
+
+        raxRange.set_facecolor("#9d9d9d")
+        raxFrequency.set_facecolor("#9d9d9d")
+
+        btnRecord.label.set_text("Arrêter acquisition")
+        btnRecord.color = "#e22200"
+        btnRecord.hovercolor = "#d22200"
+
+        if client_global and not block_ble_writes:
+            asyncio.run_coroutine_threadsafe(
+                client_global.write_gatt_char(UUID_MODE, bytearray([1]), response=False), 
+                ble_loop
+            )
+
+    else:
+        is_recording = False
+    
+        raxRange.set_facecolor("#1934e278")
+        raxFrequency.set_facecolor("#1934e278")
+
+        btnRecord.label.set_text("Lancer acquisition")
+        btnRecord.color = "#26ff00"
+        btnRecord.hovercolor = "#12d900"
+
+        if client_global and not block_ble_writes:
+            asyncio.run_coroutine_threadsafe(
+                client_global.write_gatt_char(UUID_MODE, bytearray([0]), response=False), 
+                ble_loop
+            )
+
+    fig.canvas.draw_idle() 
+
 def launch_extraction(event):
     process_batch(SAVE_MODE)
 
@@ -232,29 +304,33 @@ fig, ax1 = plt.subplots(figsize=(10, 6))
 plt.subplots_adjust(left=0.25, right=0.75, bottom = 0.25) 
 
 # Boutons  
-raxBLE = plt.axes([0.83, 0.82, 0.15, 0.12], facecolor="#babebe", title="Bluetooth")
+raxBLE = plt.axes([0.02, 0.79, 0.15, 0.12], facecolor="#1934e278", title="Bluetooth")
 radioBLE = RadioButtons(raxBLE, ('Activer', 'Désactiver'))
 radioBLE.on_clicked(change_ble_state)
 
-raxMode = plt.axes([0.02, 0.82, 0.15, 0.12], facecolor = "#babebe", title="Modes")
-radioMode = RadioButtons(raxMode, ('Temps Réel', 'Enregistrer SD'))
-radioMode.on_clicked(change_mode)
-
-raxRange = plt.axes([0.02, 0.63, 0.15, 0.12], facecolor = "#babebe", title="Interval")
+raxRange = plt.axes([0.02, 0.60, 0.15, 0.12], facecolor = "#1934e278", title="Interval")
 radioRange = RadioButtons(raxRange, ('2g', '4g', '8g'))
 radioRange.on_clicked(change_range)
 
-raxFrequency = plt.axes([0.02, 0.44, 0.15, 0.12], facecolor = "#babebe", title="Frequence")
-radioFrequency = RadioButtons(raxFrequency, ('4000 Hz', '2000 Hz', '1000 Hz', '500 Hz'))
+raxFrequency = plt.axes([0.02, 0.27, 0.15, 0.26], facecolor = "#1934e278", title="Frequence")
+radioFrequency = RadioButtons(raxFrequency, ('4000 Hz', '2000 Hz', '1000 Hz', '500 Hz', '250 Hz', '125 Hz', '62.5 Hz', '31.25 Hz', '15.625 Hz', '7.813 Hz', '3.906 Hz'))
 radioFrequency.on_clicked(change_frequency)
 
-raxSave = plt.axes([0.02, 0.25, 0.15, 0.12], facecolor = "#babebe", title="Sauvegarde PC")
+raxSave = plt.axes([0.02, 0.08, 0.15, 0.12], facecolor = "#1934e278", title="Sauvegarde PC")
 radioSave = RadioButtons(raxSave, ('CSV', 'BIN', 'CSV + BIN'))
 radioSave.on_clicked(change_save)
 
-axExtract = plt.axes([0.02, 0.05, 0.15, 0.05], facecolor = "#babebe")
-btnExtract = Button(axExtract, 'Extraire SD')
+axExtract = plt.axes([0.80, 0.53, 0.15, 0.05])
+btnExtract = Button(axExtract, 'Enregistrer sur SD')
 btnExtract.on_clicked(launch_extraction)
+btnExtract.color = "#ffff07"
+btnExtract.hovercolor = "#d5d502"
+
+axRecord = plt.axes([0.80, 0.62, 0.15, 0.05])
+btnRecord = Button(axRecord, 'Lancer acquisition')
+btnRecord.on_clicked(toggle_recording)
+btnRecord.color = "#26ff00"
+btnRecord.hovercolor = "#12d900"
 
 # Graphe des accélérations 
 ax1.set_title("Accélération (g)")
@@ -274,39 +350,70 @@ ax2 = fig.add_axes([0.25, 0.05, 0.5, 0.15])
 ax2.axis('off')
 
 text_pitch = ax2.text(0.6, 0.5, "Rotation Y : 0.00°", fontsize=14, verticalalignment='top', bbox=props, transform=ax2.transAxes)
-text_roll  = ax2.text(0.1, 0.5, "Rotation X : 0.00°", fontsize=14, verticalalignment='top', bbox=props, transform=ax2.transAxes)
+text_roll  = ax2.text(0.04, 0.5, "Rotation X : 0.00°", fontsize=14, verticalalignment='top', bbox=props, transform=ax2.transAxes)
 
 def update_plot(frame):
     """Mise à jour périodique des courbes avec le contenu actuel du buffer."""
-    global latest_pitch, latest_roll, needs_ui_sync, block_ble_writes
+    global latest_pitch, latest_roll, needs_ui_sync, block_ble_writes, is_recording
 
     if needs_ui_sync:
         needs_ui_sync = False
         block_ble_writes = True  # Bloque l'envoi d'ordres BLE pendant la mise à jour de l'IHM
         try:
-            radioMode.set_active(ble_initial_state['mode'])
             radioRange.set_active(ble_initial_state['range'])
             radioFrequency.set_active(ble_initial_state['freq'])
+
+            if ble_initial_state["mode"] == 1:
+                is_recording = True
+                raxRange.set_facecolor("#9d9d9d")
+                raxFrequency.set_facecolor("#9d9d9d")
+
+                btnRecord.label.set_text("Arrêter acquisition")
+                btnRecord.color = "#e22200"
+                btnRecord.hovercolor = "#d22200"
+            
+            else:
+                is_recording = False
+                raxRange.set_facecolor("#1934e278")
+                raxFrequency.set_facecolor("#1934e278")
+
+                btnRecord.label.set_text("Lancer acquisition")
+                btnRecord.color = "#26ff00"
+                btnRecord.hovercolor = "#12d900"
+
+            fig.canvas.draw_idle()
             print("IHM synchronisée avec le statut de la carte !")
+
         except Exception as e:
             print("Erreur lors de la synchronisation visuelle :", e)
+
         block_ble_writes = False
+        needs_ui_sync = False
 
     line_x.set_data(time_axis, list(x_data.copy()))
     line_y.set_data(time_axis, list(y_data.copy()))
     line_z.set_data(time_axis, list(z_data.copy()))
     text_pitch.set_text(f"Rotation Y : {latest_pitch:>.2f}°")
     text_roll.set_text(f"Rotation X : {latest_roll:>.2f}°")
-    
-    if abs(latest_pitch) < PRECISION_STABILITE :
-        text_pitch.set_color("green")
-    else:
-        text_pitch.set_color("red")
 
-    if abs(latest_roll) < PRECISION_STABILITE :
-        text_roll.set_color("green")
+    if abs(latest_pitch) < PRECISION_STABILITE :
+        text_pitch.get_bbox_patch().set_facecolor("#c3e6cb") 
+        text_roll.get_bbox_patch().set_edgecolor("#155724")  
+        text_pitch.set_color("#155724")                     
     else:
-        text_roll.set_color("red")
+        text_pitch.get_bbox_patch().set_facecolor("#f5c6cb") 
+        text_roll.get_bbox_patch().set_edgecolor("#721c24")
+        text_pitch.set_color("#721c24")                    
+
+    
+    if abs(latest_roll) < PRECISION_STABILITE :
+        text_roll.get_bbox_patch().set_facecolor("#c3e6cb")
+        text_roll.get_bbox_patch().set_edgecolor("#155724")  
+        text_roll.set_color("#155724")                      
+    else:
+        text_roll.get_bbox_patch().set_facecolor("#f5c6cb") 
+        text_roll.get_bbox_patch().set_edgecolor("#721c24")
+        text_roll.set_color("#721c24")
 
     return line_x, line_y, line_z, text_pitch, text_roll
 

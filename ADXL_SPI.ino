@@ -24,11 +24,18 @@
 #define _4g 1
 #define _8g 2
 
-// Sampling frequency
+// Sampling frequencies
 #define _4000Hz 0
 #define _2000Hz 1
 #define _1000Hz 2
 #define _500Hz 3
+#define _250Hz 4
+#define _125Hz 5
+#define _62_5Hz 6
+#define _31_25Hz 7
+#define _15_625Hz 8
+#define _7_813Hz 9
+#define _3_906Hz 10
 
 // Bus SPI dédié pour communiquer avec le lecteur SD
 SPIClass sdSPI(HSPI);
@@ -58,7 +65,7 @@ SdFile file;
 TinyGPSPlus gps;
 hw_timer_t * timer = NULL;
 
-const int tabHz[4] = {4000, 2000, 1000, 500};
+const int tabHz[11] = {4000, 2000, 1000, 500, 250, 125, 62.5, 31.25, 15.625, 7.813, 3.906};
 volatile uint8_t currentMode = LIVE; 
 volatile uint8_t currentRange = _2g;
 volatile uint8_t currentFreq = _4000Hz;
@@ -346,6 +353,12 @@ void setup() {
   file.remove();
   file.close();
 
+  delay(1000);
+
+  pModeChar->setValue((uint8_t*) &currentMode, (size_t) sizeof(currentMode));
+  pRangeChar->setValue((uint8_t*) &currentRange, (size_t) sizeof(currentRange));
+  pFrequencyChar->setValue((uint8_t*) &currentFreq, (size_t) sizeof(currentFreq));
+
   Serial.println("Système prêt.");
 }
 
@@ -527,6 +540,48 @@ void loop() {
         writeRegister(REG_POWER_CTL, 0x00);
       }
 
+      else if(currentFreq == _250Hz){
+        writeRegister(REG_POWER_CTL, 0x01);
+        writeRegister(REG_FILTER, 0x04); 
+        writeRegister(REG_POWER_CTL, 0x00);
+      }
+
+      else if(currentFreq == _125Hz){
+        writeRegister(REG_POWER_CTL, 0x01);
+        writeRegister(REG_FILTER, 0x05); 
+        writeRegister(REG_POWER_CTL, 0x00);
+      }
+
+      else if(currentFreq == _62_5Hz){
+        writeRegister(REG_POWER_CTL, 0x01);
+        writeRegister(REG_FILTER, 0x06); 
+        writeRegister(REG_POWER_CTL, 0x00);
+      }
+
+      else if(currentFreq == _31_25Hz){
+        writeRegister(REG_POWER_CTL, 0x01);
+        writeRegister(REG_FILTER, 0x07); 
+        writeRegister(REG_POWER_CTL, 0x00);
+      }
+
+      else if(currentFreq == _15_625Hz){
+        writeRegister(REG_POWER_CTL, 0x01);
+        writeRegister(REG_FILTER, 0x08); 
+        writeRegister(REG_POWER_CTL, 0x00);
+      }
+
+      else if(currentFreq == _7_813Hz){
+        writeRegister(REG_POWER_CTL, 0x01);
+        writeRegister(REG_FILTER, 0x09); 
+        writeRegister(REG_POWER_CTL, 0x00);
+      }
+
+      else if(currentFreq == _3_906Hz){
+        writeRegister(REG_POWER_CTL, 0x01);
+        writeRegister(REG_FILTER, 0x0A); 
+        writeRegister(REG_POWER_CTL, 0x00);
+      }
+
       TICK_US = 1000000/tabHz[currentFreq];
 
       timerAlarmWrite(timer, TICK_US, true);
@@ -540,7 +595,7 @@ void loop() {
 
       uint8_t* ptrBuf = (uint8_t*) bufferLIVE[bufToSave];
 
-      pRawDataChar->setValue(ptrBuf, (BUF_SIZE_LIVE / pow(2,currentFreq))*12);
+      pRawDataChar->setValue(ptrBuf, std::max(1, (int) (BUF_SIZE_LIVE / pow(2,currentFreq)))*12);
       pRawDataChar->notify();
     }
   }
