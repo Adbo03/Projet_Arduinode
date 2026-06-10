@@ -21,7 +21,7 @@ def process_file(bin_path, csv_path):
 
     with open(bin_path, "rb") as bin_file, open(csv_path, "w", newline='') as csv_file:
         writer = csv.writer(csv_file)
-        writer.writerow(["Acc_X_g", "Acc_Y_g", "Acc_Z_g", "Roll", "Pitch", "Latitute", "Longitude", "Time"])
+        writer.writerow(["Acc_X_g", "Acc_Y_g", "Acc_Z_g", "Roll", "Pitch", "Latitute", "Longitude", "Time (UTC)"])
 
         # Vérification du header GPS
         first_bytes = bin_file.peek(4)
@@ -96,7 +96,7 @@ def process_file(bin_path, csv_path):
                 print(f"Progression : {progression:.1f}% ({count} échantillons)")
 
 
-def process_batch(save_mode="CSV"):
+def process_batch(save_mode="CSV + BIN"):
     
     if save_mode in ["CSV", "CSV + BIN"]:
         os.makedirs("DATACSV", exist_ok=True)

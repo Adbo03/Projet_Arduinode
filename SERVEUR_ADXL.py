@@ -22,7 +22,7 @@ SCALE_FACTORS = [256000.0, 128000.0, 64000.0]
 RANGE = 0
 FREQUENCY = 0
 WINDOW_SIZE = 4000
-SAVE_MODE = "CSV"
+SAVE_MODE = 'CSV + BIN'
 BLE_ENABLE = True
 
 needs_ui_sync = False
@@ -317,11 +317,11 @@ radioFrequency = RadioButtons(raxFrequency, ('4000 Hz', '2000 Hz', '1000 Hz', '5
 radioFrequency.on_clicked(change_frequency)
 
 raxSave = plt.axes([0.02, 0.08, 0.15, 0.12], facecolor = "#1934e278", title="Sauvegarde PC")
-radioSave = RadioButtons(raxSave, ('CSV', 'BIN', 'CSV + BIN'))
+radioSave = RadioButtons(raxSave, ('CSV + BIN', 'CSV', 'BIN'))
 radioSave.on_clicked(change_save)
 
 axExtract = plt.axes([0.80, 0.53, 0.15, 0.05])
-btnExtract = Button(axExtract, 'Enregistrer sur SD')
+btnExtract = Button(axExtract, 'Extraire sur PC')
 btnExtract.on_clicked(launch_extraction)
 btnExtract.color = "#ffff07"
 btnExtract.hovercolor = "#d5d502"
