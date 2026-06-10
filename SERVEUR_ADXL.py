@@ -17,7 +17,7 @@ UUID_MODE = "19b10002-e8f2-537e-4f6c-d104768a1214"
 UUID_RANGE = "19b10003-e8f2-537e-4f6c-d104768a1214"
 UUID_FREQUENCY = "19b10004-e8f2-537e-4f6c-d104768a1214"
 
-PRECISION_STABILITE = 1     # +/- exprimée en °
+PRECISION_STABILITE = 5     # +/- exprimée en °
 SCALE_FACTORS = [256000.0, 128000.0, 64000.0]
 RANGE = 0
 FREQUENCY = 0
@@ -73,8 +73,8 @@ def notification_handler(sender, data):
                 last_x, last_y, last_z = ax, ay, az
         
         try:
-            latest_roll = math.atan2(last_y, last_z) * 180.0 / math.pi
-            latest_pitch = math.atan2(-last_x, math.sqrt(last_y * last_y + last_z * last_z)) * 180.0 / math.pi
+            latest_pitch = math.atan2(last_y, last_z) * 180.0 / math.pi
+            latest_roll = math.atan2(-last_x, math.sqrt(last_y * last_y + last_z * last_z)) * 180.0 / math.pi
 
         except ValueError:
             # Sécurité en cas de division par zéro instable
@@ -346,11 +346,11 @@ ax1.legend(loc='upper right', fontsize='small')
 props = dict(boxstyle='round', facecolor="#fefefe")
 
 # Angles de rotation
-ax2 = fig.add_axes([0.25, 0.05, 0.5, 0.15])
+ax2 = fig.add_axes([0.25, 0.05, 0.6, 0.15])
 ax2.axis('off')
 
-text_pitch = ax2.text(0.6, 0.5, "Rotation Y : 0.00°", fontsize=14, verticalalignment='top', bbox=props, transform=ax2.transAxes)
-text_roll  = ax2.text(0.04, 0.5, "Rotation X : 0.00°", fontsize=14, verticalalignment='top', bbox=props, transform=ax2.transAxes)
+text_pitch = ax2.text(0.48, 0.5, "Inclinaison Y : 0.00°", fontsize=14, verticalalignment='top', bbox=props, transform=ax2.transAxes)
+text_roll  = ax2.text(0.02, 0.5, "Inclinaison X : 0.00°", fontsize=14, verticalalignment='top', bbox=props, transform=ax2.transAxes)
 
 def update_plot(frame):
     """Mise à jour périodique des courbes avec le contenu actuel du buffer."""
@@ -393,8 +393,8 @@ def update_plot(frame):
     line_x.set_data(time_axis, list(x_data.copy()))
     line_y.set_data(time_axis, list(y_data.copy()))
     line_z.set_data(time_axis, list(z_data.copy()))
-    text_pitch.set_text(f"Rotation Y : {latest_pitch:>.2f}°")
-    text_roll.set_text(f"Rotation X : {latest_roll:>.2f}°")
+    text_pitch.set_text(f"Inclinaison Y : {latest_pitch:>.2f}°")
+    text_roll.set_text(f"Inclinaison X : {latest_roll:>.2f}°")
 
     if abs(latest_pitch) < PRECISION_STABILITE :
         text_pitch.get_bbox_patch().set_facecolor("#c3e6cb") 
