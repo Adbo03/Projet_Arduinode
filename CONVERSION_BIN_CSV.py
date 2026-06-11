@@ -73,11 +73,11 @@ def process_file(bin_path, csv_path):
             if(last_us > real_us):
                 real_seconds += 1
 
-            if(real_seconds > 60):
+            if(real_seconds > 59):
                 real_minutes += 1
                 real_seconds = 0
 
-            if(real_minutes > 60):
+            if(real_minutes > 59):
                 real_hours += 1
                 real_minutes = 0
 
