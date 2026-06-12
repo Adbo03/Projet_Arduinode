@@ -15,21 +15,25 @@ DEVICE_NAME = "ADXL355Z"
 UUID_RAWDATA = "19b10001-e8f2-537e-4f6c-d104768a1214"
 UUID_MODE = "19b10002-e8f2-537e-4f6c-d104768a1214"
 UUID_RANGE = "19b10003-e8f2-537e-4f6c-d104768a1214"
-UUID_FREQUENCY = "19b10004-e8f2-537e-4f6c-d104768a1214"
+UUID_ADXL_FREQUENCY = "19b10004-e8f2-537e-4f6c-d104768a1214"
+UUID_SOURCE_FREQUENCY = "19b10005-e8f2-537e-4f6c-d104768a1214"
+UUID_SOURCE_STATUS = "19b10006-e8f2-537e-4f6c-d104768a1214"
 
-PRECISION_STABILITE = 5     # +/- exprimée en °
+PRECISION_STABILITE = 10     # +/- exprimée en °
 SCALE_FACTORS = [256000.0, 128000.0, 64000.0]
 RANGE = 0
-FREQUENCY = 0
-WINDOW_SIZE = 4000
-SAVE_MODE = 'CSV + BIN'
+ADXL_FREQUENCY = 0
+SAVE_MODE = "CSV + BIN"
 BLE_ENABLE = True
+SOURCE_FREQUENCY = 0
+WINDOW_SIZE = 4000
 
 needs_ui_sync = False
-ble_initial_state = {'mode': 0, 'range': 0, 'freq': 0}
+ble_initial_state = {'mode': 0, 'range': 0, 'freq': 0, 's_freq': 0, 's_status': 0}
 block_ble_writes = False
 is_recording = False
 ignore_ui_events = False 
+generating_impulsions = False
 
 x_data = deque([0.0]*WINDOW_SIZE, maxlen=WINDOW_SIZE)
 y_data = deque([0.0]*WINDOW_SIZE, maxlen=WINDOW_SIZE)
@@ -109,13 +113,17 @@ async def run_ble():
             try:
                 mode_bytes = await client.read_gatt_char(UUID_MODE)
                 range_bytes = await client.read_gatt_char(UUID_RANGE)
-                freq_bytes = await client.read_gatt_char(UUID_FREQUENCY)
+                freq_bytes = await client.read_gatt_char(UUID_ADXL_FREQUENCY)
+                s_status_bytes = await client.read_gatt_char(UUID_SOURCE_STATUS)
+                s_freq_bytes = await client.read_gatt_char(UUID_SOURCE_FREQUENCY)
 
                 global ble_initial_state, needs_ui_sync
                 ble_initial_state = {
                     'mode': mode_bytes[0],
                     'range': range_bytes[0],
-                    'freq': freq_bytes[0]
+                    'freq': freq_bytes[0],
+                    'source_status' : s_status_bytes[0],
+                    'source_freq'   : s_freq_bytes[0]
                 }
 
                 needs_ui_sync = True
@@ -159,7 +167,7 @@ def change_range(label):
     if ignore_ui_events:
         return
     
-    dict_modes = {"2g": 0, "4g": 1, "8g": 2}
+    dict_modes = {"-2g/+2g": 0, "-4g/4g": 1, "-8g/+8g": 2}
     val = dict_modes[label]
 
     if is_recording:
@@ -179,7 +187,7 @@ def change_range(label):
         )
 
 def change_frequency(label):
-    global WINDOW_SIZE, FREQUENCY, x_data, y_data, z_data, time_axis, ignore_ui_events, block_ble_writes
+    global WINDOW_SIZE, ADXL_FREQUENCY, x_data, y_data, z_data, time_axis, ignore_ui_events, block_ble_writes
 
     if ignore_ui_events:
         return
@@ -199,18 +207,18 @@ def change_frequency(label):
     val = dict_modes[label]
 
     if is_recording:
-        if val != FREQUENCY:
+        if val != ADXL_FREQUENCY:
             old_block = block_ble_writes
             block_ble_writes = True
-            radioFrequency.set_active(FREQUENCY) # Force le retour à l'ancienne valeur
+            radioFrequency.set_active(ADXL_FREQUENCY) 
             block_ble_writes = old_block
         return
 
-    FREQUENCY = val 
+    ADXL_FREQUENCY = val 
 
     if client_global and not block_ble_writes:
         asyncio.run_coroutine_threadsafe(
-            client_global.write_gatt_char(UUID_FREQUENCY, bytearray([val]), response=False), 
+            client_global.write_gatt_char(UUID_ADXL_FREQUENCY, bytearray([val]), response=False), 
             ble_loop
         )
 
@@ -259,6 +267,42 @@ def change_ble_state(label):
         else:
             print("\nBluetooth désactivé. Déconnexion en cours...\n")
 
+def change_source_freq(label):
+    global SOURCE_FREQUENCY, block_ble_writes, ignore_ui_events
+
+    if ignore_ui_events:
+        return
+    
+    dict_modes = {"10 Hz": 0, 
+                  "20 Hz": 1, 
+                  "30 Hz": 2, 
+                  "40 Hz": 3, 
+                  "50 Hz": 4, 
+                  "60 Hz": 5, 
+                  "70 Hz": 6, 
+                  "80 Hz": 7, 
+                  "90 Hz": 8, 
+                  "100 Hz": 9}
+    
+    val = dict_modes[label]
+
+    if generating_impulsions:
+        if val != SOURCE_FREQUENCY:
+            old_block = block_ble_writes
+            block_ble_writes = True
+            radioSourcefreq.set_active(SOURCE_FREQUENCY) 
+            block_ble_writes = old_block
+        return
+    
+    SOURCE_FREQUENCY = val
+
+    if client_global and not block_ble_writes:
+        asyncio.run_coroutine_threadsafe(
+            client_global.write_gatt_char(UUID_SOURCE_FREQUENCY, bytearray([val]), response=False), 
+            ble_loop
+        )
+
+
 def toggle_recording(event):
     global btnRecord, is_recording
 
@@ -285,12 +329,47 @@ def toggle_recording(event):
         raxFrequency.set_facecolor("#1934e278")
 
         btnRecord.label.set_text("Lancer acquisition")
-        btnRecord.color = "#26ff00"
-        btnRecord.hovercolor = "#12d900"
+        btnRecord.color = "#ffb300"
+        btnRecord.hovercolor = "#df9e05"
 
         if client_global and not block_ble_writes:
             asyncio.run_coroutine_threadsafe(
                 client_global.write_gatt_char(UUID_MODE, bytearray([0]), response=False), 
+                ble_loop
+            )
+
+    fig.canvas.draw_idle() 
+
+def toggle_source(event):
+    global btnSource, generating_impulsions
+
+    if not generating_impulsions:
+        generating_impulsions = True
+
+        raxSourcefreq.set_facecolor("#9d9d9d")
+
+        btnSource.label.set_text("Désactiver la source")
+        btnSource.color = "#e22200"
+        btnSource.hovercolor = "#d22200"
+
+        if client_global and not block_ble_writes:
+            asyncio.run_coroutine_threadsafe(
+                client_global.write_gatt_char(UUID_SOURCE_STATUS, bytearray([1]), response=False), 
+                ble_loop
+            )
+
+    else:
+        generating_impulsions = False
+    
+        raxSourcefreq.set_facecolor("#1934e278")
+
+        btnSource.label.set_text("Activer la source")
+        btnSource.color = "#26ff00"
+        btnSource.hovercolor = "#12d900"
+
+        if client_global and not block_ble_writes:
+            asyncio.run_coroutine_threadsafe(
+                client_global.write_gatt_char(UUID_SOURCE_STATUS, bytearray([0]), response=False), 
                 ble_loop
             )
 
@@ -308,29 +387,39 @@ raxBLE = plt.axes([0.02, 0.79, 0.15, 0.12], facecolor="#1934e278", title="Blueto
 radioBLE = RadioButtons(raxBLE, ('Activer', 'Désactiver'))
 radioBLE.on_clicked(change_ble_state)
 
-raxRange = plt.axes([0.02, 0.60, 0.15, 0.12], facecolor = "#1934e278", title="Interval")
-radioRange = RadioButtons(raxRange, ('2g', '4g', '8g'))
+raxRange = plt.axes([0.02, 0.60, 0.15, 0.12], facecolor = "#1934e278", title="Plage de mesure")
+radioRange = RadioButtons(raxRange, ('-2g/+2g', '-4g/+4g', '-8g/+8g'))
 radioRange.on_clicked(change_range)
 
-raxFrequency = plt.axes([0.02, 0.27, 0.15, 0.26], facecolor = "#1934e278", title="Frequence")
+raxFrequency = plt.axes([0.02, 0.27, 0.15, 0.26], facecolor = "#1934e278", title="Echantillonnage")
 radioFrequency = RadioButtons(raxFrequency, ('4000 Hz', '2000 Hz', '1000 Hz', '500 Hz', '250 Hz', '125 Hz', '62.5 Hz', '31.25 Hz', '15.625 Hz', '7.813 Hz', '3.906 Hz'))
 radioFrequency.on_clicked(change_frequency)
 
 raxSave = plt.axes([0.02, 0.08, 0.15, 0.12], facecolor = "#1934e278", title="Sauvegarde PC")
-radioSave = RadioButtons(raxSave, ('CSV + BIN', 'CSV', 'BIN'))
+radioSave = RadioButtons(raxSave, ('CSV', 'BIN', 'CSV + BIN'))
 radioSave.on_clicked(change_save)
 
-axExtract = plt.axes([0.80, 0.53, 0.15, 0.05])
+raxSourcefreq = plt.axes([0.80, 0.64, 0.15, 0.25], facecolor = "#1934e278", title="Frequence Source")
+radioSourcefreq = RadioButtons(raxSourcefreq, ('10 Hz', '20 Hz', '30 Hz', '40 Hz', '50 Hz', '60 Hz', '70 Hz', '80 Hz', '90 Hz', '100 Hz'))
+radioSourcefreq.on_clicked(change_source_freq)
+
+axSource = plt.axes([0.80, 0.55, 0.15, 0.05])
+btnSource = Button(axSource, 'Activer source')
+btnSource.on_clicked(toggle_source)
+btnSource.color = "#26ff00"
+btnSource.hovercolor = "#12d900"
+
+axRecord = plt.axes([0.80, 0.49, 0.15, 0.05])
+btnRecord = Button(axRecord, 'Lancer acquisition')
+btnRecord.on_clicked(toggle_recording)
+btnRecord.color = "#ffb300"
+btnRecord.hovercolor = "#df9e05"
+
+axExtract = plt.axes([0.80, 0.43, 0.15, 0.05])
 btnExtract = Button(axExtract, 'Extraire sur PC')
 btnExtract.on_clicked(launch_extraction)
 btnExtract.color = "#ffff07"
 btnExtract.hovercolor = "#d5d502"
-
-axRecord = plt.axes([0.80, 0.62, 0.15, 0.05])
-btnRecord = Button(axRecord, 'Lancer acquisition')
-btnRecord.on_clicked(toggle_recording)
-btnRecord.color = "#26ff00"
-btnRecord.hovercolor = "#12d900"
 
 # Graphe des accélérations 
 ax1.set_title("Accélération (g)")
@@ -354,7 +443,7 @@ text_roll  = ax2.text(0.02, 0.5, "Inclinaison X : 0.00°", fontsize=14, vertical
 
 def update_plot(frame):
     """Mise à jour périodique des courbes avec le contenu actuel du buffer."""
-    global latest_pitch, latest_roll, needs_ui_sync, block_ble_writes, is_recording
+    global latest_pitch, latest_roll, needs_ui_sync, block_ble_writes, is_recording, generating_impulsions
 
     if needs_ui_sync:
         needs_ui_sync = False
@@ -362,6 +451,7 @@ def update_plot(frame):
         try:
             radioRange.set_active(ble_initial_state['range'])
             radioFrequency.set_active(ble_initial_state['freq'])
+            radioSourcefreq.set_active(ble_initial_state["source_freq"])
 
             if ble_initial_state["mode"] == 1:
                 is_recording = True
@@ -378,8 +468,26 @@ def update_plot(frame):
                 raxFrequency.set_facecolor("#1934e278")
 
                 btnRecord.label.set_text("Lancer acquisition")
-                btnRecord.color = "#26ff00"
-                btnRecord.hovercolor = "#12d900"
+                btnRecord.color = "#ffb300"
+                btnRecord.hovercolor = "#df9e05"
+
+            if ble_initial_state["source_status"] == 1:
+                generating_impulsions = True
+                raxSourcefreq.set_facecolor("#9d9d9d")
+
+                btnSource.label.set_text("Désactiver la source")
+                btnSource.color = "#e22200"
+                btnSource.hovercolor = "#d22200"
+            
+            else:
+                generating_impulsions = False
+
+                raxSourcefreq.set_facecolor("#1934e278")
+
+                btnSource.label.set_text("Activer la source")
+                btnSource.color = "#26ff00"
+                btnSource.hovercolor = "#12d900"
+
 
             fig.canvas.draw_idle()
             print("IHM synchronisée avec le statut de la carte !")
