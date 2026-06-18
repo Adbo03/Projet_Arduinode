@@ -11,7 +11,7 @@ import matplotlib.animation as animation
 import math 
 
 # --- PARAMETRAGE ---
-DEVICE_NAME = "ADXL355Z" 
+DEVICE_NAME = "ArduiNode" 
 UUID_RAWDATA = "19b10001-e8f2-537e-4f6c-d104768a1214"
 UUID_MODE = "19b10002-e8f2-537e-4f6c-d104768a1214"
 UUID_RANGE = "19b10003-e8f2-537e-4f6c-d104768a1214"
@@ -34,6 +34,7 @@ block_ble_writes = False
 is_recording = False
 ignore_ui_events = False 
 generating_impulsions = False
+axes_changed = False
 
 x_data = deque([0.0]*WINDOW_SIZE, maxlen=WINDOW_SIZE)
 y_data = deque([0.0]*WINDOW_SIZE, maxlen=WINDOW_SIZE)
@@ -378,6 +379,10 @@ def toggle_source(event):
 def launch_extraction(event):
     process_batch(SAVE_MODE)
 
+def on_limits_changed(ax):
+    global axes_changed
+    axes_changed = True
+
 # --- Affichage (Matplotlib) ---
 fig, ax1 = plt.subplots(figsize=(10, 6))
 plt.subplots_adjust(left=0.25, right=0.75, bottom = 0.25) 
@@ -431,6 +436,8 @@ line_x, = ax1.plot(time_axis, x_data, label='X', color='red')
 line_y, = ax1.plot(time_axis, y_data, label='Y', color='green')
 line_z, = ax1.plot(time_axis, z_data, label='Z', color='blue')
 ax1.legend(loc='upper right', fontsize='small')
+ax1.callbacks.connect('xlim_changed', on_limits_changed)
+ax1.callbacks.connect('ylim_changed', on_limits_changed)
 
 props = dict(boxstyle='round', facecolor="#fefefe")
 
@@ -444,7 +451,12 @@ text_roll  = ax2.text(0.02, 0.5, "Inclinaison X : 0.00°", fontsize=14, vertical
 def update_plot(frame):
     """Mise à jour périodique des courbes avec le contenu actuel du buffer."""
     global latest_pitch, latest_roll, needs_ui_sync, block_ble_writes, is_recording, generating_impulsions
+    global axes_changed
 
+    if axes_changed:
+        axes_changed = False
+        fig.canvas.draw()
+        
     if needs_ui_sync:
         needs_ui_sync = False
         block_ble_writes = True  # Bloque l'envoi d'ordres BLE pendant la mise à jour de l'IHM
