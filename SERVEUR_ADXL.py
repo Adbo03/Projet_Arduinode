@@ -11,13 +11,13 @@ import matplotlib.animation as animation
 import math 
 
 # --- PARAMETRAGE ---
-DEVICE_NAME = "Arduinode" 
+UUID_SERVICE_ARDUINODE = "19b10000-e8f2-537e-4f6c-d104768a1214"
 UUID_RAWDATA = "19b10001-e8f2-537e-4f6c-d104768a1214"
 UUID_MODE = "19b10002-e8f2-537e-4f6c-d104768a1214"
 UUID_RANGE = "19b10003-e8f2-537e-4f6c-d104768a1214"
 UUID_ADXL_FREQUENCY = "19b10004-e8f2-537e-4f6c-d104768a1214"
 
-SOURCE_NAME = "Nodequake"
+UUID_SERVICE_SOURCE = "18b10000-e8f2-537e-4f6c-d104768a1214"
 UUID_SOURCE_MODE = "18b10001-e8f2-537e-4f6c-d104768a1214"
 UUID_SOURCE_FREQUENCY = "18b10002-e8f2-537e-4f6c-d104768a1214"
 
@@ -45,7 +45,7 @@ latest_pitch = 0.0
 latest_roll = 0.0
 
 client_Arduinode = None
-client_Nodequake = None
+client_Source = None
 ble_loop = None
 ble_running = True
 reconnect_delay = 5
@@ -86,43 +86,63 @@ def notification_handler(sender, data):
             # Sécurité en cas de division par zéro instable
             pass
 
-async def run_ble():
-    global client_Arduinode, client_Nodequake, ble_running, btnRecord, BLE_ENABLE
-    global ble_initial_state, needs_ui_sync
+async def discover_by_uuid():
+    print("Recherche automatique des cartes...")
+    
+    devices_dict = await BleakScanner.discover(timeout=5.0, return_adv=True)
+    
+    mac_arduinode = None
+    mac_source = None
 
-    # --- CONFIGURATION DIRECTE DES ADRESSES MAC ---
-    MAC_ARDUINODE = "48:CA:43:2E:30:99"
-    # Essayez cette adresse en premier. Si Nodequake ne se connecte pas, 
-    # remplacez-la par "78:EE:5C:18:BD:F7"
-    MAC_NODEQUAKE = "E4:B0:63:AE:86:49" 
+    for address, (device, adv_data) in devices_dict.items():
+        uuids = adv_data.service_uuids
+        
+        if UUID_SERVICE_ARDUINODE in uuids:
+            mac_arduinode = address
+            print(f"Arduinode détecté : {address}")
+            
+        elif UUID_SERVICE_SOURCE in uuids:
+            mac_source = address
+            print(f"Source détecté : {address}")
+
+    return mac_arduinode, mac_source
+
+async def run_ble():
+    global client_Arduinode, client_Source, ble_running, btnRecord, BLE_ENABLE
+    global ble_initial_state, needs_ui_sync
 
     while ble_running:
 
         if not BLE_ENABLE:
             await asyncio.sleep(1)
             continue
+        
+        MAC_ARDUINODE, MAC_SOURCE = await discover_by_uuid()
 
-        print("Tentative de connexion directe via les adresses MAC...")
+        if not MAC_ARDUINODE:
+            print("Aucun Arduinode à portée. Nouvelle tentative dans 5 secondes...")
+            await asyncio.sleep(5)
+            continue
+        
+        if not MAC_SOURCE:
+            print("Source introuvable. Nouvelle tentative dans 5 secondes...")
+            await asyncio.sleep(5)
+            continue
+
+        print("Tentative de connexion aux cartes trouvées...")
         client_1 = None
         client_2 = None
 
         try:
-            # Connexion directe à Arduinode sans scanner
-            print(f"Connexion à Arduinode ({MAC_ARDUINODE})...")
             client_1 = BleakClient(MAC_ARDUINODE, disconnected_callback=on_disconnect)
             await client_1.connect()
             client_Arduinode = client_1
-            print("✅ Connecté à Arduinode !")
-            print("Nom : " +client_1.name)
+            print("Connecté à Arduinode !")
 
-
-            # Connexion directe à Nodequake sans scanner
-            print(f"Connexion à Nodequake ({MAC_NODEQUAKE})...")
-            client_2 = BleakClient(MAC_NODEQUAKE)
+            client_2 = BleakClient(MAC_SOURCE)
             await client_2.connect()
-            client_Nodequake = client_2
-            print("✅ Connecté à Nodequake !")
-            print("Nom : "+ client_2.name)
+            client_Source = client_2
+            print("Connecté à la source !")
 
             # Lecture des configurations initiales des caractéristiques
             try:
@@ -158,13 +178,15 @@ async def run_ble():
         except Exception as e:
             print("Erreur lors de la connexion BLE :", e)
 
-        # Gestion des déconnexions et nettoyage des flux
+        # Gestion des déconnexions
         try:
             if not ble_running:
                 if client_1 is not None and client_1.is_connected:
                     await client_1.disconnect()
+
                 if client_2 is not None and client_2.is_connected:
                     await client_2.disconnect()
+
         except Exception as disconnect_error:
             print("Erreur lors de la déconnexion forcée :", disconnect_error)
         
@@ -172,7 +194,7 @@ async def run_ble():
             client_Arduinode = None
 
         if client_2 and not client_2.is_connected:
-            client_Nodequake = None
+            client_Source = None
 
         if ble_running:
             print(f"Connexion perdue ou échouée. Nouvelle tentative dans {reconnect_delay} secondes...")
@@ -318,9 +340,9 @@ def change_source_freq(label):
     
     SOURCE_FREQUENCY = val
 
-    if client_Nodequake and not block_ble_writes:
+    if client_Source and not block_ble_writes:
         asyncio.run_coroutine_threadsafe(
-            client_Nodequake.write_gatt_char(UUID_SOURCE_FREQUENCY, bytearray([val]), response=False), 
+            client_Source.write_gatt_char(UUID_SOURCE_FREQUENCY, bytearray([val]), response=False), 
             ble_loop
         )
 
@@ -374,9 +396,9 @@ def toggle_source(event):
         btnSource.color = "#e22200"
         btnSource.hovercolor = "#d22200"
 
-        if client_Nodequake and not block_ble_writes:
+        if client_Source and not block_ble_writes:
             asyncio.run_coroutine_threadsafe(
-                client_Nodequake.write_gatt_char(UUID_SOURCE_MODE, bytearray([1]), response=False), 
+                client_Source.write_gatt_char(UUID_SOURCE_MODE, bytearray([1]), response=False), 
                 ble_loop
             )
 
@@ -389,9 +411,9 @@ def toggle_source(event):
         btnSource.color = "#26ff00"
         btnSource.hovercolor = "#12d900"
 
-        if client_Nodequake and not block_ble_writes:
+        if client_Source and not block_ble_writes:
             asyncio.run_coroutine_threadsafe(
-                client_Nodequake.write_gatt_char(UUID_SOURCE_MODE, bytearray([0]), response=False), 
+                client_Source.write_gatt_char(UUID_SOURCE_MODE, bytearray([0]), response=False), 
                 ble_loop
             )
 
