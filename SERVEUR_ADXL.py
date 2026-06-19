@@ -11,13 +11,15 @@ import matplotlib.animation as animation
 import math 
 
 # --- PARAMETRAGE ---
-DEVICE_NAME = "ArduiNode" 
+DEVICE_NAME = "Arduinode" 
 UUID_RAWDATA = "19b10001-e8f2-537e-4f6c-d104768a1214"
 UUID_MODE = "19b10002-e8f2-537e-4f6c-d104768a1214"
 UUID_RANGE = "19b10003-e8f2-537e-4f6c-d104768a1214"
 UUID_ADXL_FREQUENCY = "19b10004-e8f2-537e-4f6c-d104768a1214"
-UUID_SOURCE_FREQUENCY = "19b10005-e8f2-537e-4f6c-d104768a1214"
-UUID_SOURCE_STATUS = "19b10006-e8f2-537e-4f6c-d104768a1214"
+
+SOURCE_NAME = "Nodequake"
+UUID_SOURCE_MODE = "18b10001-e8f2-537e-4f6c-d104768a1214"
+UUID_SOURCE_FREQUENCY = "18b10002-e8f2-537e-4f6c-d104768a1214"
 
 PRECISION_STABILITE = 10     # +/- exprimée en °
 SCALE_FACTORS = [256000.0, 128000.0, 64000.0]
@@ -42,13 +44,12 @@ z_data = deque([0.0]*WINDOW_SIZE, maxlen=WINDOW_SIZE)
 latest_pitch = 0.0
 latest_roll = 0.0
 
-
-client_global = None
+client_Arduinode = None
+client_Nodequake = None
 ble_loop = None
 ble_running = True
 reconnect_delay = 5
 
-# --- BLE ---
 def notification_handler(sender, data):
     """Décode les nouvelles données reçues et les stocke dans les buffer"""
     global latest_pitch, latest_roll
@@ -86,7 +87,14 @@ def notification_handler(sender, data):
             pass
 
 async def run_ble():
-    global client_global, ble_running, btnRecord, BLE_ENABLE
+    global client_Arduinode, client_Nodequake, ble_running, btnRecord, BLE_ENABLE
+    global ble_initial_state, needs_ui_sync
+
+    # --- CONFIGURATION DIRECTE DES ADRESSES MAC ---
+    MAC_ARDUINODE = "48:CA:43:2E:30:99"
+    # Essayez cette adresse en premier. Si Nodequake ne se connecte pas, 
+    # remplacez-la par "78:EE:5C:18:BD:F7"
+    MAC_NODEQUAKE = "E4:B0:63:AE:86:49" 
 
     while ble_running:
 
@@ -94,36 +102,41 @@ async def run_ble():
             await asyncio.sleep(1)
             continue
 
-        print(f"Recherche de la carte '{DEVICE_NAME}'...")
-        device = await BleakScanner.find_device_by_name(DEVICE_NAME)
-
-        if not device:
-            print("Carte introuvable. Nouvelle tentative dans 5 secondes...")
-            await asyncio.sleep(5)
-            continue
-        
-        client = None
+        print("Tentative de connexion directe via les adresses MAC...")
+        client_1 = None
+        client_2 = None
 
         try:
-            client = BleakClient(device, disconnected_callback=on_disconnect)
-            await client.connect()
-            client_global = client
+            # Connexion directe à Arduinode sans scanner
+            print(f"Connexion à Arduinode ({MAC_ARDUINODE})...")
+            client_1 = BleakClient(MAC_ARDUINODE, disconnected_callback=on_disconnect)
+            await client_1.connect()
+            client_Arduinode = client_1
+            print("✅ Connecté à Arduinode !")
+            print("Nom : " +client_1.name)
 
-            print("Connecté au BLE !")
 
+            # Connexion directe à Nodequake sans scanner
+            print(f"Connexion à Nodequake ({MAC_NODEQUAKE})...")
+            client_2 = BleakClient(MAC_NODEQUAKE)
+            await client_2.connect()
+            client_Nodequake = client_2
+            print("✅ Connecté à Nodequake !")
+            print("Nom : "+ client_2.name)
+
+            # Lecture des configurations initiales des caractéristiques
             try:
-                mode_bytes = await client.read_gatt_char(UUID_MODE)
-                range_bytes = await client.read_gatt_char(UUID_RANGE)
-                freq_bytes = await client.read_gatt_char(UUID_ADXL_FREQUENCY)
-                s_status_bytes = await client.read_gatt_char(UUID_SOURCE_STATUS)
-                s_freq_bytes = await client.read_gatt_char(UUID_SOURCE_FREQUENCY)
+                mode_bytes = await client_1.read_gatt_char(UUID_MODE)
+                range_bytes = await client_1.read_gatt_char(UUID_RANGE)
+                freq_bytes = await client_1.read_gatt_char(UUID_ADXL_FREQUENCY)
+                s_mode_bytes = await client_2.read_gatt_char(UUID_SOURCE_MODE)
+                s_freq_bytes = await client_2.read_gatt_char(UUID_SOURCE_FREQUENCY)
 
-                global ble_initial_state, needs_ui_sync
                 ble_initial_state = {
                     'mode': mode_bytes[0],
                     'range': range_bytes[0],
                     'freq': freq_bytes[0],
-                    'source_status' : s_status_bytes[0],
+                    'source_mode' : s_mode_bytes[0],
                     'source_freq'   : s_freq_bytes[0]
                 }
 
@@ -134,27 +147,35 @@ async def run_ble():
             
             if BLE_ENABLE:
                 print("Démarrage du flux de données...")
-                await client.start_notify(UUID_RAWDATA, notification_handler)
+                await client_1.start_notify(UUID_RAWDATA, notification_handler)
             else:
                 print("Connexion établie, mais communication en pause.")
             
-            while client.is_connected and ble_running:
+            # Boucle de maintien de la connexion tant que les clients restent connectés
+            while client_1.is_connected and client_2.is_connected and ble_running:
                 await asyncio.sleep(1)
 
         except Exception as e:
-            print("Erreur BLE :", e)
+            print("Erreur lors de la connexion BLE :", e)
 
+        # Gestion des déconnexions et nettoyage des flux
         try:
-            if client is not None :
-                if client.is_connected:
-                    await client.disconnect()
-        
+            if not ble_running:
+                if client_1 is not None and client_1.is_connected:
+                    await client_1.disconnect()
+                if client_2 is not None and client_2.is_connected:
+                    await client_2.disconnect()
         except Exception as disconnect_error:
             print("Erreur lors de la déconnexion forcée :", disconnect_error)
-            
-        client_global = None
+        
+        if client_1 and not client_1.is_connected:
+            client_Arduinode = None
+
+        if client_2 and not client_2.is_connected:
+            client_Nodequake = None
 
         if ble_running:
+            print(f"Connexion perdue ou échouée. Nouvelle tentative dans {reconnect_delay} secondes...")
             await asyncio.sleep(reconnect_delay)
 
     print("Arrêt complet du BLE.")
@@ -168,7 +189,7 @@ def change_range(label):
     if ignore_ui_events:
         return
     
-    dict_modes = {"-2g/+2g": 0, "-4g/4g": 1, "-8g/+8g": 2}
+    dict_modes = {"-2g/+2g": 0, "-4g/+4g": 1, "-8g/+8g": 2}
     val = dict_modes[label]
 
     if is_recording:
@@ -181,9 +202,9 @@ def change_range(label):
     
     RANGE = val
 
-    if client_global and not block_ble_writes:
+    if client_Arduinode and not block_ble_writes:
         asyncio.run_coroutine_threadsafe(
-            client_global.write_gatt_char(UUID_RANGE, bytearray([val]), response=False), 
+            client_Arduinode.write_gatt_char(UUID_RANGE, bytearray([val]), response=False), 
             ble_loop
         )
 
@@ -217,9 +238,9 @@ def change_frequency(label):
 
     ADXL_FREQUENCY = val 
 
-    if client_global and not block_ble_writes:
+    if client_Arduinode and not block_ble_writes:
         asyncio.run_coroutine_threadsafe(
-            client_global.write_gatt_char(UUID_ADXL_FREQUENCY, bytearray([val]), response=False), 
+            client_Arduinode.write_gatt_char(UUID_ADXL_FREQUENCY, bytearray([val]), response=False), 
             ble_loop
         )
 
@@ -248,17 +269,17 @@ def change_ble_state(label):
     global BLE_ENABLE
     BLE_ENABLE = (label == 'Activer')
 
-    if client_global and client_global.is_connected:
+    if client_Arduinode and client_Arduinode.is_connected:
         if BLE_ENABLE:
             print("\nReprise de la communication (Lecture)...\n")
             asyncio.run_coroutine_threadsafe(
-                client_global.start_notify(UUID_RAWDATA, notification_handler), 
+                client_Arduinode.start_notify(UUID_RAWDATA, notification_handler), 
                 ble_loop
             )
         else:
             print("\nCommunication en pause (Stop)...\n")
             asyncio.run_coroutine_threadsafe(
-                client_global.stop_notify(UUID_RAWDATA), 
+                client_Arduinode.stop_notify(UUID_RAWDATA), 
                 ble_loop
             )
 
@@ -297,9 +318,9 @@ def change_source_freq(label):
     
     SOURCE_FREQUENCY = val
 
-    if client_global and not block_ble_writes:
+    if client_Nodequake and not block_ble_writes:
         asyncio.run_coroutine_threadsafe(
-            client_global.write_gatt_char(UUID_SOURCE_FREQUENCY, bytearray([val]), response=False), 
+            client_Nodequake.write_gatt_char(UUID_SOURCE_FREQUENCY, bytearray([val]), response=False), 
             ble_loop
         )
 
@@ -317,9 +338,9 @@ def toggle_recording(event):
         btnRecord.color = "#e22200"
         btnRecord.hovercolor = "#d22200"
 
-        if client_global and not block_ble_writes:
+        if client_Arduinode and not block_ble_writes:
             asyncio.run_coroutine_threadsafe(
-                client_global.write_gatt_char(UUID_MODE, bytearray([1]), response=False), 
+                client_Arduinode.write_gatt_char(UUID_MODE, bytearray([1]), response=False), 
                 ble_loop
             )
 
@@ -333,9 +354,9 @@ def toggle_recording(event):
         btnRecord.color = "#ffb300"
         btnRecord.hovercolor = "#df9e05"
 
-        if client_global and not block_ble_writes:
+        if client_Arduinode and not block_ble_writes:
             asyncio.run_coroutine_threadsafe(
-                client_global.write_gatt_char(UUID_MODE, bytearray([0]), response=False), 
+                client_Arduinode.write_gatt_char(UUID_MODE, bytearray([0]), response=False), 
                 ble_loop
             )
 
@@ -353,9 +374,9 @@ def toggle_source(event):
         btnSource.color = "#e22200"
         btnSource.hovercolor = "#d22200"
 
-        if client_global and not block_ble_writes:
+        if client_Nodequake and not block_ble_writes:
             asyncio.run_coroutine_threadsafe(
-                client_global.write_gatt_char(UUID_SOURCE_STATUS, bytearray([1]), response=False), 
+                client_Nodequake.write_gatt_char(UUID_SOURCE_MODE, bytearray([1]), response=False), 
                 ble_loop
             )
 
@@ -368,9 +389,9 @@ def toggle_source(event):
         btnSource.color = "#26ff00"
         btnSource.hovercolor = "#12d900"
 
-        if client_global and not block_ble_writes:
+        if client_Nodequake and not block_ble_writes:
             asyncio.run_coroutine_threadsafe(
-                client_global.write_gatt_char(UUID_SOURCE_STATUS, bytearray([0]), response=False), 
+                client_Nodequake.write_gatt_char(UUID_SOURCE_MODE, bytearray([0]), response=False), 
                 ble_loop
             )
 
@@ -388,7 +409,7 @@ fig, ax1 = plt.subplots(figsize=(10, 6))
 plt.subplots_adjust(left=0.25, right=0.75, bottom = 0.25) 
 
 # Boutons  
-raxBLE = plt.axes([0.02, 0.79, 0.15, 0.12], facecolor="#1934e278", title="Bluetooth")
+raxBLE = plt.axes([0.02, 0.79, 0.15, 0.12], facecolor="#1934e278", title="Recherche Bluetooth")
 radioBLE = RadioButtons(raxBLE, ('Activer', 'Désactiver'))
 radioBLE.on_clicked(change_ble_state)
 
@@ -404,7 +425,7 @@ raxSave = plt.axes([0.02, 0.08, 0.15, 0.12], facecolor = "#1934e278", title="Sau
 radioSave = RadioButtons(raxSave, ('CSV', 'BIN', 'CSV + BIN'))
 radioSave.on_clicked(change_save)
 
-raxSourcefreq = plt.axes([0.80, 0.64, 0.15, 0.25], facecolor = "#1934e278", title="Frequence Source")
+raxSourcefreq = plt.axes([0.80, 0.64, 0.15, 0.25], facecolor = "#1934e278", title="Frequence Source (+/-2.5Hz)")
 radioSourcefreq = RadioButtons(raxSourcefreq, ('10 Hz', '20 Hz', '30 Hz', '40 Hz', '50 Hz', '60 Hz', '70 Hz', '80 Hz', '90 Hz', '100 Hz'))
 radioSourcefreq.on_clicked(change_source_freq)
 
@@ -483,7 +504,7 @@ def update_plot(frame):
                 btnRecord.color = "#ffb300"
                 btnRecord.hovercolor = "#df9e05"
 
-            if ble_initial_state["source_status"] == 1:
+            if ble_initial_state["source_mode"] == 1:
                 generating_impulsions = True
                 raxSourcefreq.set_facecolor("#9d9d9d")
 
