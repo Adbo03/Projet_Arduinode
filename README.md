@@ -1,9 +1,13 @@
 # Node-sismique-3C
 Développement d'un noeud sismique 3 composantes
 
-Composants utilisés : ADXL355Z, NANO ESP32, lecteur carte SD (JOY-IT), Ultimate GPS Breakout v3 (adafruit)
+Arduinode : ADXL355Z, NANO ESP32, lecteur carte SD (JOY-IT), Ultimate GPS Breakout v3 (adafruit)
+
+Source : ASX11504-SW-R (PUI Audio), NANO ESP32, amplificateur de puissance
 
 IDE utilisé : Arduino IDE v2.3.8
+
+A NOTER : Des resistances et des capacités ont aussi été utilisés pour des opérations intermédiaires diverses. 
 
 Ce projet consiste au développement de nodes sismiques 3C low-cost (objectif : ~100€
 par unité), conçu pour répondre aux besoins des applications environnementales, géotechniques
@@ -16,11 +20,13 @@ stockage de données, et une batterie Li-ion pour l’alimentation.
 - **SERVEUR_ADXL.py** : code serveur qui permet de se connecter en BLE à la carte arduino et d'afficher en temps réel les données sur les 3 axes ainsi que l'inclinaison (Axe X/ Axe Y) de l'ADXL.
 - **CONVERSION_BIN_CSV.py** : code permettant la conversion des fichiers binaires en csv et le stockage sur le PC.
 - **ScanEarth.exe** : exécutable facilitant le lancement de l'interface pour la visualisation de données et le paramétrage de l'accéléromètre.
-
+- **SOURCE_BLE.ino** : code gérant la génération de la source. Avec la carte, on peut venir modifier la fréquence du signal généré via l'interface (code SERVEUR_ADXL.py).
 
 **CONSEILS D'UTILISATION**
 
-Pour faire fonctionner le système, il suffit de programmer la NANO ESP32 avec l'un des deux codes arduino. Veillez à bien cabler les connections entre l'accéléromètre et l'arduino !
+*ARDUINODE*:
+
+Pour faire fonctionner le système, il suffit de programmer la NANO ESP32 avec l'un des deux codes arduino (ADXL_I2C.ino ou ADXL_SPI.ino). Veillez à bien cabler les connections entre l'accéléromètre et l'arduino !
 
 Protocole I2C : 
 - VDDIO (ADXL) relié au 3v3 (NANO).
@@ -65,6 +71,17 @@ L'ADXL propose différentes précisions de mesure. Pour jouer sur cette dernièr
 - Pour +-2g : **REG_RANGE** = 0x01 | **SCALE_FACTOR** = 256 000.
 - Pour +-4g : **REG_RANGE** = 0x02 | **SCALE_FACTOR** = 128 000.
 - Pour +-8g : **REG_RANGE** = 0x03 | **SCALE_FACTOR** = 64 000.
+
+*SOURCE*:
+
+Pour générer le signal source, le code utilise le PWM de la carte en guise de porteuse à 40kHz. La source audio ne fonctionnant que sur une plage allant de 5Hz-500Hz, il faut donc filtrer la porteuse pour récupérer le signal réel. Pour cela, un filtre passe-bas est utilisé entre la carte et l'amplificateur de puissance. Ce filtre a pour fréquence de coupure ~338,6 Hz (1kΩ/470nF) pour atténuer les fréquences proches et au delà de la limite de la source.
+
+Cablage :
+
+- PWM (D6/NANO) branché en entrée du filtre PB.
+- Sortie du filtre doit être branché en entrée de l'amplificateur de puissance.
+
+**INFOS GENERALES** 
 
 L'envoi en BLE se fait automatiquement et n'a pas besoin d'être paramétré. Sur smartphone, il suffit de se connecter au système (nommé 'ADXL355Z') via une application BLE telle que nRF Connect. Si on veut visualiser les graphes en temps réel, on peut aussi exécuter le code **SERVEUR_ADXL.py** à partir d'un terminal :
 
