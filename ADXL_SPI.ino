@@ -6,27 +6,26 @@
 #include <stdlib.h>
 #include <map>
 
-#define TRUE 1
-#define FALSE 0
+#define TRUE    1
+#define FALSE   0
 
 // Paramétrage
-#define ADXL_CS 10
-#define SD_CS 9 
-#define SCK_SD 22
-#define MOSI_SD 23
-#define MISO_SD 21
+#define ADXL_CS   10
+#define SD_CS     9 
+#define SCK_SD    22
+#define MOSI_SD   23
+#define MISO_SD   21
 
 #define PPS_PIN 2
-#define SOURCE_PIN 6
 
 // Modes
-#define LIVE 0
-#define RECORD 1
+#define LIVE    0
+#define RECORD  1
 
 // Plages de mesure
-#define _2g 0
-#define _4g 1
-#define _8g 2
+#define _2g   0
+#define _4g   1
+#define _8g   2
 
 // Frequences d'échantillonnage
 #define _4000Hz   0
@@ -40,19 +39,6 @@
 #define _15_625Hz 8
 #define _7_813Hz  9
 #define _3_906Hz  10
-
-// Frequences signal source
-#define SOURCE_10Hz   0
-#define SOURCE_20Hz   1
-#define SOURCE_30Hz   2
-#define SOURCE_40Hz   3
-#define SOURCE_50Hz   4
-#define SOURCE_60Hz   5
-#define SOURCE_70Hz   6
-#define SOURCE_80Hz   7
-#define SOURCE_90Hz   8
-#define SOURCE_100Hz  9
-
 
 // Bus SPI dédié pour communiquer avec le lecteur SD
 SPIClass sdSPI(HSPI);
@@ -80,26 +66,19 @@ volatile bool fullFlag = false;
 SdFat sd;
 SdFile file;
 TinyGPSPlus gps;
-hw_timer_t * timer = NULL;
+hw_timer_t * timerSample = NULL;
 
 const int tabHz[11] = {4000, 2000, 1000, 500, 250, 125, 62.5, 31.25, 15.625, 7.813, 3.906};
-const int tabSourcefreq[10] = {10, 20, 30, 40, 50, 60, 70, 80, 90, 100};
-uint8_t sineTable[256];
 volatile uint8_t currentMode = LIVE; 
 volatile uint8_t currentRange = _2g;
 volatile uint8_t currentFreq = _4000Hz;
-volatile uint8_t currentSource_freq = SOURCE_10Hz;   
-volatile uint8_t activeSource = FALSE;
 
-volatile int32_t TICK_US = 1000000/tabHz[currentFreq];
+volatile int32_t TICK_SAMPLE_US = 1000000/tabHz[currentFreq];
 
 volatile uint32_t pps_micros = 0;
 float lastLat = 0, lastLon = 0;
 char hours[3], minutes[3], seconds[3], title[25];
 char interval[3];
-
-volatile float samplesPerSec = 256.0 * (float) tabSourcefreq[currentSource_freq];
-volatile unsigned long microsPerSample = (unsigned long)(1000000.0 / samplesPerSec);
 
 // Adresses des registres
 const int REG_XDATA3 = 0x08;
@@ -113,8 +92,6 @@ NimBLECharacteristic* pRawDataChar = NULL;
 NimBLECharacteristic* pModeChar = NULL;
 NimBLECharacteristic* pRangeChar = NULL;
 NimBLECharacteristic* pFrequencyChar = NULL;
-NimBLECharacteristic* pSourceFreqChar = NULL;
-NimBLECharacteristic* pSourceStatusChar = NULL;
 
 
 volatile bool deviceConnected = false;
@@ -122,15 +99,12 @@ bool wasConnected = false;
 volatile bool modeWritten = false;
 volatile bool rangeWritten = false;
 volatile bool freqWritten = false;
-volatile bool source_freqWritten = false;
-volatile bool source_statusWritten = false;
-bool envoiInit = false;
 
 int32_t x_raw = 0;
 int32_t y_raw = 0;
 int32_t z_raw = 0;
 
-SemaphoreHandle_t timerSemaphore;
+SemaphoreHandle_t timerSampleFlag;
 
 class MyServerCallbacks: public NimBLEServerCallbacks {
   public:
@@ -201,47 +175,9 @@ class FreqCallbacks: public NimBLECharacteristicCallbacks {
       }
 };
 
-class Source_FreqCallbacks: public NimBLECharacteristicCallbacks {
-    public:
-      void onWrite(NimBLECharacteristic* pCharacteristic, NimBLEConnInfo& connInfo) {
-        std::string value = pCharacteristic->getValue();
-        if (value.length() > 0) {
-      
-          if(currentSource_freq != (uint8_t)value[0]){
-            currentSource_freq = (uint8_t)value[0];
-            source_freqWritten = true;
-          }
-
-          else{
-            source_freqWritten = false;
-          }
-
-        }
-      }
-};
-
-class Source_StatusCallbacks: public NimBLECharacteristicCallbacks {
-    public:
-      void onWrite(NimBLECharacteristic* pCharacteristic, NimBLEConnInfo& connInfo) {
-        std::string value = pCharacteristic->getValue();
-        if (value.length() > 0) {
-      
-          if(activeSource != (uint8_t) value[0]){
-            activeSource = (uint8_t) value[0];
-            source_statusWritten = true;
-          }
-
-          else{
-            source_statusWritten = false;
-          }
-
-        }
-      }
-};
-
 void IRAM_ATTR Sample_handler() {
   BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-  xSemaphoreGiveFromISR(timerSemaphore, &xHigherPriorityTaskWoken);
+  xSemaphoreGiveFromISR(timerSampleFlag, &xHigherPriorityTaskWoken);
   if (xHigherPriorityTaskWoken) {
     portYIELD_FROM_ISR();
   }
@@ -285,10 +221,9 @@ void ADXL_ReadRaw(){
   if (z_raw & 0x00080000) z_raw |= 0xFFF00000;
 }
 
-
 void ADXL_Task(void * pvParameters) {
   while(1) {
-    if (xSemaphoreTake(timerSemaphore, portMAX_DELAY) == pdTRUE) {
+    if (xSemaphoreTake(timerSampleFlag, portMAX_DELAY) == pdTRUE) {
       ADXL_ReadRaw();
 
       if(currentMode == LIVE){
@@ -320,48 +255,11 @@ void ADXL_Task(void * pvParameters) {
   }
 }
 
-void SINE_Task(void* pv) { 
-  int i = 0;
-  unsigned long lastUpdate = 0;
-  
-  while(1){
-    if(activeSource){
-      unsigned long now = micros();
-      
-      // Mise à jour de l'échantillon à l'intervalle calculé
-      if(now - lastUpdate >= microsPerSample){
-        lastUpdate = now;
-        ledcWrite(0, sineTable[i]);             
-        i++;
-        if(i > 255) i = 0;
-      }
-      
-      // Empêche le Watchdog de faire redémarrer l'ESP32
-      taskYIELD(); 
-      
-    } else {
-      // En cas de pause, on centre le signal (127 = 0V alternatif) et on libère le CPU
-      ledcWrite(0, 127);
-      i = 0;
-      vTaskDelay(pdMS_TO_TICKS(50));
-    }
-  }
-}
-
 void writeRegister(uint8_t reg, uint8_t value) {
   digitalWrite(ADXL_CS, LOW);
   SPI.transfer((reg << 1) | 0x00);
   SPI.transfer(value);
   digitalWrite(ADXL_CS, HIGH);
-}
-
-void setupSineTable() {
-  for (int i = 0; i < 256; ++i) {
-    float angle = (2.0 * PI * i) / 256;
-    float s = sin(angle);                 
-    uint8_t v = (uint8_t)( (s * 0.5 + 0.5) * 255.0 ); 
-    sineTable[i] = v;
-  }
 }
 
 void setup() {
@@ -393,12 +291,12 @@ void setup() {
       while(1);
   }
 
-  timerSemaphore = xSemaphoreCreateBinary();
+  timerSampleFlag = xSemaphoreCreateBinary();
+  
   xTaskCreatePinnedToCore(ADXL_Task, "ADXL_Task", 4096, NULL, 10, NULL, 1);
-  xTaskCreatePinnedToCore(SINE_Task, "SINE_Task", 4096, NULL, 9, NULL, 1);
 
   // Configuration BLE 
-  NimBLEDevice::init("ADXL355Z");
+  NimBLEDevice::init("Arduinode");
   NimBLEDevice::setMTU(512); 
 
   pServer = NimBLEDevice::createServer();
@@ -426,27 +324,15 @@ void setup() {
                 NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE
               );
 
-  pSourceFreqChar = pService->createCharacteristic(
-                "19b10005-e8f2-537e-4f6c-d104768a1214",
-                NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE
-              );
-
-  pSourceStatusChar = pService->createCharacteristic(
-                "19b10006-e8f2-537e-4f6c-d104768a1214",
-                NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE
-              );
-
   pModeChar->setCallbacks(new ModeCallbacks());
   pRangeChar->setCallbacks(new RangeCallbacks());
   pFrequencyChar->setCallbacks(new FreqCallbacks());
-  pSourceFreqChar->setCallbacks(new Source_FreqCallbacks());
-  pSourceStatusChar->setCallbacks(new Source_StatusCallbacks());
 
   pService->start();
 
   NimBLEAdvertising* pAdvertising = NimBLEDevice::getAdvertising();
   pAdvertising->addServiceUUID(pService->getUUID());
-  pAdvertising->setName("ADXL355Z");
+  pAdvertising->setName("Arduinode");
   pAdvertising->setPreferredParams(0x06, 0x12); 
   pAdvertising->start();
   
@@ -456,36 +342,27 @@ void setup() {
   writeRegister(REG_RANGE, 0x01); 
   writeRegister(REG_POWER_CTL, 0x00);
 
-  // Configuration du Timer ESP32 pour le 4kHz (mode Enregistrement)
-  timer = timerBegin(0, 80, true); // Diviseur 80 = 1MHz (1 tick = 1us)
-  timerAttachInterrupt(timer, &Sample_handler, true);
-  timerAlarmWrite(timer, TICK_US, true);
-  timerAlarmEnable(timer);
+  // Timer pour l'acquisition des données
+  timerSample = timerBegin(0, 80, true);
+  timerAttachInterrupt(timerSample, &Sample_handler, true);
+  timerAlarmWrite(timerSample, TICK_SAMPLE_US, true);
+  timerAlarmEnable(timerSample);
 
   // Configuration de PPS_PIN
   pinMode(PPS_PIN, INPUT_PULLDOWN);
   attachInterrupt(digitalPinToInterrupt(PPS_PIN), PPS_handler, RISING);
-
 
   if (!file.open("init.bin", O_RDWR | O_CREAT | O_AT_END)) {
     Serial.println("Echec critique : impossible de créer le fichier binaire.");
   }
   file.remove();
   file.close();
-  
-  ledcSetup(0, 40000, 8); 
-  ledcAttachPin(SOURCE_PIN, 0);
-  ledcWrite(0, 127);
-
-  setupSineTable();
 
   delay(1000);
 
   pModeChar->setValue((uint8_t*) &currentMode, (size_t) sizeof(currentMode));
   pRangeChar->setValue((uint8_t*) &currentRange, (size_t) sizeof(currentRange));
   pFrequencyChar->setValue((uint8_t*) &currentFreq, (size_t) sizeof(currentFreq));
-  pSourceFreqChar->setValue((uint8_t*) &currentSource_freq, (size_t) sizeof(currentSource_freq));
-  pSourceStatusChar->setValue((uint8_t*) &activeSource, (size_t) sizeof(activeSource));
 
   Serial.println("Système prêt.");
 }
@@ -510,7 +387,7 @@ void loop() {
       
       pModeChar->setValue((uint8_t*) &currentMode, (size_t) sizeof(currentMode));
 
-      timerAlarmDisable(timer);
+      timerAlarmDisable(timerSample);
 
       activeBuf = 0;
       bufIdx = 0;
@@ -565,7 +442,7 @@ void loop() {
         }
       }
 
-      timerAlarmEnable(timer);
+      timerAlarmEnable(timerSample);
     }
 
     if(rangeWritten){
@@ -573,7 +450,7 @@ void loop() {
       
       pRangeChar->setValue((uint8_t*) &currentRange, (size_t) sizeof(currentRange));
 
-      timerAlarmDisable(timer);
+      timerAlarmDisable(timerSample);
 
       if(currentRange == _2g){
         writeRegister(REG_POWER_CTL, 0x01);
@@ -634,7 +511,7 @@ void loop() {
         
       }
       
-      timerAlarmEnable(timer);
+      timerAlarmEnable(timerSample);
     }
 
     if(freqWritten){
@@ -642,7 +519,7 @@ void loop() {
       
       pFrequencyChar->setValue((uint8_t*) &currentFreq, (size_t) sizeof(currentFreq));
 
-      timerAlarmDisable(timer);
+      timerAlarmDisable(timerSample);
 
       if(currentFreq == _4000Hz){
         writeRegister(REG_POWER_CTL, 0x01);
@@ -710,29 +587,10 @@ void loop() {
         writeRegister(REG_POWER_CTL, 0x00);
       }
 
-      TICK_US = 1000000/tabHz[currentFreq];
+      TICK_SAMPLE_US = 1000000/tabHz[currentFreq];
 
-      timerAlarmWrite(timer, TICK_US, true);
-      timerAlarmEnable(timer);
-    }
-
-    if(source_freqWritten){
-      source_freqWritten = false;
-      
-      samplesPerSec = 256.0 * (float) tabSourcefreq[currentSource_freq];
-      microsPerSample = (unsigned long)(1000000.0 / samplesPerSec);
-      
-      pSourceFreqChar->setValue((uint8_t*) &currentSource_freq, (size_t) sizeof(currentSource_freq));    
-    }
-
-    if(source_statusWritten){
-      source_statusWritten = false;
-    
-      if(!activeSource){
-        ledcWrite(0, 127); 
-      }
-
-      pSourceStatusChar->setValue((uint8_t*) &activeSource, (size_t) sizeof(activeSource));
+      timerAlarmWrite(timerSample, TICK_SAMPLE_US, true);
+      timerAlarmEnable(timerSample);
     }
 
     // Mise à jour BLE
