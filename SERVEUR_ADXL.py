@@ -326,7 +326,10 @@ def change_source_freq(label):
                   "70 Hz": 6, 
                   "80 Hz": 7, 
                   "90 Hz": 8, 
-                  "100 Hz": 9}
+                  "100 Hz": 9,
+                  "150 Hz": 10,
+                  "200 Hz": 11,
+                  "250 Hz": 12}
     
     val = dict_modes[label]
 
@@ -447,23 +450,23 @@ raxSave = plt.axes([0.02, 0.08, 0.15, 0.12], facecolor = "#1934e278", title="Sau
 radioSave = RadioButtons(raxSave, ('CSV', 'BIN', 'CSV + BIN'))
 radioSave.on_clicked(change_save)
 
-raxSourcefreq = plt.axes([0.80, 0.64, 0.15, 0.25], facecolor = "#1934e278", title="Frequence Source (+/-2.5Hz)")
-radioSourcefreq = RadioButtons(raxSourcefreq, ('10 Hz', '20 Hz', '30 Hz', '40 Hz', '50 Hz', '60 Hz', '70 Hz', '80 Hz', '90 Hz', '100 Hz'))
+raxSourcefreq = plt.axes([0.80, 0.60, 0.15, 0.31], facecolor = "#1934e278", title="Frequence ricker (+/-2.5Hz)")
+radioSourcefreq = RadioButtons(raxSourcefreq, ('10 Hz', '20 Hz', '30 Hz', '40 Hz', '50 Hz', '60 Hz', '70 Hz', '80 Hz', '90 Hz', '100 Hz', '150 Hz', '200 Hz', '250 Hz'))
 radioSourcefreq.on_clicked(change_source_freq)
 
-axSource = plt.axes([0.80, 0.55, 0.15, 0.05])
+axSource = plt.axes([0.80, 0.50, 0.15, 0.05])
 btnSource = Button(axSource, 'Activer source')
 btnSource.on_clicked(toggle_source)
 btnSource.color = "#26ff00"
 btnSource.hovercolor = "#12d900"
 
-axRecord = plt.axes([0.80, 0.49, 0.15, 0.05])
+axRecord = plt.axes([0.80, 0.44, 0.15, 0.05])
 btnRecord = Button(axRecord, 'Lancer acquisition')
 btnRecord.on_clicked(toggle_recording)
 btnRecord.color = "#ffb300"
 btnRecord.hovercolor = "#df9e05"
 
-axExtract = plt.axes([0.80, 0.43, 0.15, 0.05])
+axExtract = plt.axes([0.80, 0.38, 0.15, 0.05])
 btnExtract = Button(axExtract, 'Extraire sur PC')
 btnExtract.on_clicked(launch_extraction)
 btnExtract.color = "#ffff07"

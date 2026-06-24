@@ -13,13 +13,13 @@
 #define ON    1
 #define OFF   0
 
-const int tabHz[10] = {10, 20, 30, 40, 50, 60, 70, 80, 90, 100};
-uint8_t sineTable[TABLE_SIZE];
+const int tabHz[13] = {10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 150, 200, 250};
+uint8_t rickerTable[TABLE_SIZE];
 volatile uint8_t currentMode = OFF; 
 volatile uint8_t currentFreq = 0;   
 
-volatile float samplesPerSec = (float) TABLE_SIZE * (float) tabHz[currentFreq];
-volatile unsigned long microsPerSample = (unsigned long) (1000000.0 / samplesPerSec);
+volatile float samplesPerSec = ((float)TABLE_SIZE * PI * (float) tabHz[currentFreq]) / 6.0f;
+volatile unsigned long microsPerSample = (unsigned long)(1000000.0f / samplesPerSec);
 
 // Objets et pointeurs BLE 
 NimBLEServer* pServer = NULL;
@@ -81,7 +81,7 @@ class FreqCallbacks: public NimBLECharacteristicCallbacks {
       }
 };
 
-void SINE_Task(void* pv) { 
+void RICKER_Task(void* pv) { 
   int i = 0;
   unsigned long lastUpdate = 0;
   
@@ -92,7 +92,7 @@ void SINE_Task(void* pv) {
       
       if(now - lastUpdate >= microsPerSample){
         lastUpdate = now;
-        ledcWrite(0, sineTable[i]);             
+        ledcWrite(0, rickerTable[i]);             
         i++;
         if(i > TABLE_SIZE - 1) i = 0;
       }
@@ -107,12 +107,22 @@ void SINE_Task(void* pv) {
   }
 }
 
-void setupSineTable() {
+void setupRickerTable() {
+  int maxPWM = (1 << SOURCE_RES) - 1; 
+  
+  float minVal = -0.4463f;
+  float maxVal = 1.0f;
+  float range = maxVal - minVal; 
+
   for (int i = 0; i < TABLE_SIZE; ++i) {
-    float angle = (2.0 * PI * i) / TABLE_SIZE;
-    float s = sin(angle);                 
-    uint8_t v = (uint8_t)( (s * 0.5 + 0.5) * ((1 << SOURCE_RES) - 1)); 
-    sineTable[i] = v;
+    
+    float x = -3.0f + (6.0f * (float)i) / (float)(TABLE_SIZE - 1);
+    
+    float y = (1.0f - 2.0f * x * x) * exp(-x * x);
+    
+    // Normalisation et mapping entre 0 et maxPWM 
+    uint16_t v = (uint16_t)(((y - minVal) / range) * maxPWM);
+    rickerTable[i] = v;
   }
 }
 
@@ -120,7 +130,7 @@ void setup() {
   Serial.begin(115200);
   delay(1000); 
   
-  xTaskCreatePinnedToCore(SINE_Task, "SINE_Task", 4096, NULL, 10, NULL, 1);
+  xTaskCreatePinnedToCore(RICKER_Task, "Ricker_Task", 4096, NULL, 10, NULL, 1);
 
   NimBLEDevice::init("Nodequake"); 
   pServer = NimBLEDevice::createServer();
@@ -152,7 +162,7 @@ void setup() {
   ledcAttachPin(SOURCE_PIN, 0);
   ledcWrite(0, TABLE_SIZE/2 - 1);
 
-  setupSineTable();
+  setupRickerTable();
 
   delay(1000);
 
