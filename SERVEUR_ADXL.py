@@ -34,9 +34,11 @@ needs_ui_sync = False
 ble_initial_state = {'mode': 0, 'range': 0, 'freq': 0, 's_freq': 0, 's_status': 0}
 block_ble_writes = False
 is_recording = False
+is_streaming = False
 ignore_ui_events = False 
 generating_impulsions = False
 axes_changed = False
+connect_source = False
 
 x_data = deque([0.0]*WINDOW_SIZE, maxlen=WINDOW_SIZE)
 y_data = deque([0.0]*WINDOW_SIZE, maxlen=WINDOW_SIZE)
@@ -118,47 +120,58 @@ async def run_ble():
             continue
         
         MAC_ARDUINODE, MAC_SOURCE = await discover_by_uuid()
-
-        if not MAC_ARDUINODE:
-            print("Aucun Arduinode à portée. Nouvelle tentative dans 5 secondes...")
-            await asyncio.sleep(5)
-            continue
         
-        if not MAC_SOURCE:
-            print("Source introuvable. Nouvelle tentative dans 5 secondes...")
-            await asyncio.sleep(5)
-            continue
+        if client_Arduinode is None:
+            if not MAC_ARDUINODE:
+                print("Aucun Arduinode à portée. Nouvelle tentative dans 5 secondes...")
+                await asyncio.sleep(5)
+                continue
+
+            client_1 = None
+
+        if client_Source is None:
+            if connect_source:
+                if not MAC_SOURCE:
+                    print("Source introuvable. Nouvelle tentative dans 5 secondes...")
+                    await asyncio.sleep(5)
+                    continue
+                
+            client_2 = None
 
         print("Tentative de connexion aux cartes trouvées...")
-        client_1 = None
-        client_2 = None
-
+        
         try:
-            client_1 = BleakClient(MAC_ARDUINODE, disconnected_callback=on_disconnect)
-            await client_1.connect()
-            client_Arduinode = client_1
-            print("Connecté à Arduinode !")
 
-            client_2 = BleakClient(MAC_SOURCE)
-            await client_2.connect()
-            client_Source = client_2
-            print("Connecté à la source !")
+            if client_Arduinode is None:
+                client_1 = BleakClient(MAC_ARDUINODE, disconnected_callback=on_disconnect)
+                await client_1.connect()
+                client_Arduinode = client_1
+                print("Connecté à Arduinode !")
 
-            # Lecture des configurations initiales des caractéristiques
+            if connect_source and client_Source is None:
+                client_2 = BleakClient(MAC_SOURCE)
+                await client_2.connect()
+                client_Source = client_2
+                print("Connecté à la source !")
+
+            # Synchronisation des paramètres
             try:
                 mode_bytes = await client_1.read_gatt_char(UUID_MODE)
                 range_bytes = await client_1.read_gatt_char(UUID_RANGE)
                 freq_bytes = await client_1.read_gatt_char(UUID_ADXL_FREQUENCY)
-                s_mode_bytes = await client_2.read_gatt_char(UUID_SOURCE_MODE)
-                s_freq_bytes = await client_2.read_gatt_char(UUID_SOURCE_FREQUENCY)
 
                 ble_initial_state = {
                     'mode': mode_bytes[0],
                     'range': range_bytes[0],
-                    'freq': freq_bytes[0],
-                    'source_mode' : s_mode_bytes[0],
-                    'source_freq'   : s_freq_bytes[0]
+                    'freq': freq_bytes[0]
                 }
+
+                if connect_source:
+                    s_mode_bytes = await client_2.read_gatt_char(UUID_SOURCE_MODE)
+                    s_freq_bytes = await client_2.read_gatt_char(UUID_SOURCE_FREQUENCY)
+
+                    ble_initial_state['source_mode'] = s_mode_bytes[0]
+                    ble_initial_state['source_freq'] = s_freq_bytes[0]
 
                 needs_ui_sync = True
 
@@ -171,8 +184,8 @@ async def run_ble():
             else:
                 print("Connexion établie, mais communication en pause.")
             
-            # Boucle de maintien de la connexion tant que les clients restent connectés
-            while client_1.is_connected and client_2.is_connected and ble_running:
+            # Boucle de maintien de la connexion tant que les clients sont connectés
+            while client_1.is_connected and ble_running and (not connect_source or (connect_source and client_2 is not None and client_2.is_connected)):
                 await asyncio.sleep(1)
 
         except Exception as e:
@@ -197,7 +210,7 @@ async def run_ble():
             client_Source = None
 
         if ble_running:
-            print(f"Connexion perdue ou échouée. Nouvelle tentative dans {reconnect_delay} secondes...")
+            print(f"Un des appareils n'est pas connecté. Nouvelle tentative dans {reconnect_delay} secondes...")
             await asyncio.sleep(reconnect_delay)
 
     print("Arrêt complet du BLE.")
@@ -365,7 +378,7 @@ def toggle_recording(event):
 
         if client_Arduinode and not block_ble_writes:
             asyncio.run_coroutine_threadsafe(
-                client_Arduinode.write_gatt_char(UUID_MODE, bytearray([1]), response=False), 
+                client_Arduinode.write_gatt_char(UUID_MODE, bytearray([2]), response=False), 
                 ble_loop
             )
 
@@ -387,9 +400,43 @@ def toggle_recording(event):
 
     fig.canvas.draw_idle() 
 
+def toggle_stream(event):
+    global btnStream, is_streaming
+
+    if not is_streaming:
+        is_streaming = True
+
+        btnStream.label.set_text("Arrêter stream")
+        btnStream.color = "#e22200"
+        btnStream.hovercolor = "#d22200"
+
+        if client_Arduinode and not block_ble_writes:
+            asyncio.run_coroutine_threadsafe(
+                client_Arduinode.write_gatt_char(UUID_MODE, bytearray([1]), response=False), 
+                ble_loop
+            )
+
+    else:
+        is_streaming = False
+
+        btnStream.label.set_text("Lancer stream")
+        btnStream.color = "#00aeff"
+        btnStream.hovercolor = "#0299de"
+
+        if client_Arduinode and not block_ble_writes:
+            asyncio.run_coroutine_threadsafe(
+                client_Arduinode.write_gatt_char(UUID_MODE, bytearray([0]), response=False), 
+                ble_loop
+            )
+
+    fig.canvas.draw_idle() 
+
 def toggle_source(event):
     global btnSource, generating_impulsions
 
+    if not connect_source:
+        return
+    
     if not generating_impulsions:
         generating_impulsions = True
 
@@ -422,6 +469,15 @@ def toggle_source(event):
 
     fig.canvas.draw_idle() 
 
+def toggle_connect_src(label):
+    global connect_source
+
+    if label == "Activer":
+        connect_source = True
+
+    else:
+        connect_source = False
+
 def launch_extraction(event):
     process_batch(SAVE_MODE)
 
@@ -450,23 +506,34 @@ raxSave = plt.axes([0.02, 0.08, 0.15, 0.12], facecolor = "#1934e278", title="Sau
 radioSave = RadioButtons(raxSave, ('CSV', 'BIN', 'CSV + BIN'))
 radioSave.on_clicked(change_save)
 
-raxSourcefreq = plt.axes([0.80, 0.60, 0.15, 0.31], facecolor = "#1934e278", title="Frequence ricker (+/-2.5Hz)")
+raxConnect_src = plt.axes([0.80, 0.79, 0.15, 0.12], facecolor="#1934e278", title="Connexion Source")
+radioConnect_src = RadioButtons(raxConnect_src, ('Activer', 'Désactiver'))
+radioConnect_src.on_clicked(toggle_connect_src)
+radioConnect_src.set_active(1)
+
+raxSourcefreq = plt.axes([0.80, 0.41, 0.15, 0.31], facecolor = "#1934e278", title="Frequence ricker (+/-2.5Hz)")
 radioSourcefreq = RadioButtons(raxSourcefreq, ('10 Hz', '20 Hz', '30 Hz', '40 Hz', '50 Hz', '60 Hz', '70 Hz', '80 Hz', '90 Hz', '100 Hz', '150 Hz', '200 Hz', '250 Hz'))
 radioSourcefreq.on_clicked(change_source_freq)
 
-axSource = plt.axes([0.80, 0.50, 0.15, 0.05])
+axSource = plt.axes([0.80, 0.31, 0.15, 0.05])
 btnSource = Button(axSource, 'Activer source')
 btnSource.on_clicked(toggle_source)
-btnSource.color = "#26ff00"
-btnSource.hovercolor = "#12d900"
+btnSource.color = "#9d9d9d"
+btnSource.hovercolor = "#9d9d9d"
 
-axRecord = plt.axes([0.80, 0.44, 0.15, 0.05])
+axRecord = plt.axes([0.80, 0.25, 0.15, 0.05])
 btnRecord = Button(axRecord, 'Lancer acquisition')
 btnRecord.on_clicked(toggle_recording)
 btnRecord.color = "#ffb300"
 btnRecord.hovercolor = "#df9e05"
 
-axExtract = plt.axes([0.80, 0.38, 0.15, 0.05])
+axStream = plt.axes([0.80, 0.19, 0.15, 0.05])
+btnStream = Button(axStream, 'Lancer stream')
+btnStream.on_clicked(toggle_stream)
+btnStream.color = "#00aeff"
+btnStream.hovercolor = "#0299de"
+
+axExtract = plt.axes([0.80, 0.13, 0.15, 0.05])
 btnExtract = Button(axExtract, 'Extraire sur PC')
 btnExtract.on_clicked(launch_extraction)
 btnExtract.color = "#ffff07"
@@ -488,15 +555,15 @@ ax1.callbacks.connect('ylim_changed', on_limits_changed)
 props = dict(boxstyle='round', facecolor="#fefefe")
 
 # Angles de rotation
-ax2 = fig.add_axes([0.25, 0.05, 0.6, 0.15])
+ax2 = fig.add_axes([0.25, 0.05, 0.5, 0.15])
 ax2.axis('off')
 
-text_pitch = ax2.text(0.48, 0.5, "Inclinaison Y : 0.00°", fontsize=14, verticalalignment='top', bbox=props, transform=ax2.transAxes)
-text_roll  = ax2.text(0.02, 0.5, "Inclinaison X : 0.00°", fontsize=14, verticalalignment='top', bbox=props, transform=ax2.transAxes)
+text_pitch = ax2.text(0.525, 0.5, "Inclinaison Y : 0.00°", fontsize=14, verticalalignment='top', bbox=props, transform=ax2.transAxes)
+text_roll  = ax2.text(0.021, 0.5, "Inclinaison X : 0.00°", fontsize=14, verticalalignment='top', bbox=props, transform=ax2.transAxes)
 
 def update_plot(frame):
     """Mise à jour périodique des courbes avec le contenu actuel du buffer."""
-    global latest_pitch, latest_roll, needs_ui_sync, block_ble_writes, is_recording, generating_impulsions
+    global latest_pitch, latest_roll, needs_ui_sync, block_ble_writes, is_recording, is_streaming, generating_impulsions
     global axes_changed
 
     if axes_changed:
@@ -509,19 +576,41 @@ def update_plot(frame):
         try:
             radioRange.set_active(ble_initial_state['range'])
             radioFrequency.set_active(ble_initial_state['freq'])
-            radioSourcefreq.set_active(ble_initial_state["source_freq"])
+
+            if connect_source:
+                radioSourcefreq.set_active(ble_initial_state["source_freq"])
 
             if ble_initial_state["mode"] == 1:
+                is_streaming = True
+                is_recording = False
+
+                btnStream.label.set_text("Arrêter stream")
+                btnStream.color = "#e22200"
+                btnStream.hovercolor = "#d22200"
+
+                btnRecord.label.set_text("Lancer acquisition")
+                btnRecord.color = "#ffb300"
+                btnRecord.hovercolor = "#df9e05"
+
+            elif ble_initial_state["mode"] == 2:
                 is_recording = True
+                is_streaming = False
+
                 raxRange.set_facecolor("#9d9d9d")
                 raxFrequency.set_facecolor("#9d9d9d")
 
                 btnRecord.label.set_text("Arrêter acquisition")
                 btnRecord.color = "#e22200"
                 btnRecord.hovercolor = "#d22200"
+
+                btnStream.label.set_text("Lancer stream")
+                btnStream.color = "#00aeff"
+                btnStream.hovercolor = "#0299de"
             
             else:
                 is_recording = False
+                is_streaming = False
+
                 raxRange.set_facecolor("#1934e278")
                 raxFrequency.set_facecolor("#1934e278")
 
@@ -529,23 +618,28 @@ def update_plot(frame):
                 btnRecord.color = "#ffb300"
                 btnRecord.hovercolor = "#df9e05"
 
-            if ble_initial_state["source_mode"] == 1:
-                generating_impulsions = True
-                raxSourcefreq.set_facecolor("#9d9d9d")
+                btnStream.label.set_text("Lancer stream")
+                btnStream.color = "#00aeff"
+                btnStream.hovercolor = "#0299de"
 
-                btnSource.label.set_text("Désactiver la source")
-                btnSource.color = "#e22200"
-                btnSource.hovercolor = "#d22200"
-            
-            else:
-                generating_impulsions = False
+            if connect_source:
+                
+                if ble_initial_state["source_mode"] == 1:
+                    generating_impulsions = True
+                    raxSourcefreq.set_facecolor("#9d9d9d")
 
-                raxSourcefreq.set_facecolor("#1934e278")
+                    btnSource.label.set_text("Désactiver la source")
+                    btnSource.color = "#e22200"
+                    btnSource.hovercolor = "#d22200"
+                
+                else:
+                    generating_impulsions = False
 
-                btnSource.label.set_text("Activer la source")
-                btnSource.color = "#26ff00"
-                btnSource.hovercolor = "#12d900"
+                    raxSourcefreq.set_facecolor("#1934e278")
 
+                    btnSource.label.set_text("Activer la source")
+                    btnSource.color = "#26ff00"
+                    btnSource.hovercolor = "#12d900"
 
             fig.canvas.draw_idle()
             print("IHM synchronisée avec le statut de la carte !")

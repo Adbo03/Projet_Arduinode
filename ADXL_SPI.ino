@@ -19,8 +19,9 @@
 #define PPS_PIN 2
 
 // Modes
-#define LIVE    0
-#define RECORD  1
+#define SBY     0
+#define LIVE    1
+#define RECORD  2
 
 // Plages de mesure
 #define _2g   0
@@ -69,7 +70,7 @@ TinyGPSPlus gps;
 hw_timer_t * timerSample = NULL;
 
 const int tabHz[11] = {4000, 2000, 1000, 500, 250, 125, 62.5, 31.25, 15.625, 7.813, 3.906};
-volatile uint8_t currentMode = LIVE; 
+volatile uint8_t currentMode = SBY; 
 volatile uint8_t currentRange = _2g;
 volatile uint8_t currentFreq = _4000Hz;
 
@@ -188,37 +189,40 @@ void IRAM_ATTR PPS_handler() {
 }
 
 void ADXL_ReadRaw(){
-  // 10MHz, Mode 0 (CPOL=0, CPHA=0)
-  SPI.beginTransaction(SPISettings(10000000, MSBFIRST, SPI_MODE0));
-  
-  // Lecture de XDATA3 (9 octets)
-  digitalWrite(ADXL_CS, LOW);
-  SPI.transfer((REG_XDATA3 << 1) | 0x01); 
-  
-  uint32_t x3 = SPI.transfer(0x00);
-  uint32_t x2 = SPI.transfer(0x00);
-  uint32_t x1 = SPI.transfer(0x00);
-  
-  uint32_t y3 = SPI.transfer(0x00);
-  uint32_t y2 = SPI.transfer(0x00);
-  uint32_t y1 = SPI.transfer(0x00);
-  
-  uint32_t z3 = SPI.transfer(0x00);
-  uint32_t z2 = SPI.transfer(0x00);
-  uint32_t z1 = SPI.transfer(0x00);
 
-  digitalWrite(ADXL_CS, HIGH);
+  if((currentMode == LIVE) || (currentMode == RECORD)){
+    // 10MHz, Mode 0 (CPOL=0, CPHA=0)
+    SPI.beginTransaction(SPISettings(10000000, MSBFIRST, SPI_MODE0));
+    
+    // Lecture de XDATA3 (9 octets)
+    digitalWrite(ADXL_CS, LOW);
+    SPI.transfer((REG_XDATA3 << 1) | 0x01); 
+    
+    uint32_t x3 = SPI.transfer(0x00);
+    uint32_t x2 = SPI.transfer(0x00);
+    uint32_t x1 = SPI.transfer(0x00);
+    
+    uint32_t y3 = SPI.transfer(0x00);
+    uint32_t y2 = SPI.transfer(0x00);
+    uint32_t y1 = SPI.transfer(0x00);
+    
+    uint32_t z3 = SPI.transfer(0x00);
+    uint32_t z2 = SPI.transfer(0x00);
+    uint32_t z1 = SPI.transfer(0x00);
 
-  SPI.endTransaction();
+    digitalWrite(ADXL_CS, HIGH);
 
-  // Reformatage des données
-  x_raw = (x3 << 12) | (x2 << 4) | (x1 >> 4);
-  y_raw = (y3 << 12) | (y2 << 4) | (y1 >> 4);
-  z_raw = (z3 << 12) | (z2 << 4) | (z1 >> 4);
+    SPI.endTransaction();
 
-  if (x_raw & 0x00080000) x_raw |= 0xFFF00000;
-  if (y_raw & 0x00080000) y_raw |= 0xFFF00000;
-  if (z_raw & 0x00080000) z_raw |= 0xFFF00000;
+    // Reformatage des données
+    x_raw = (x3 << 12) | (x2 << 4) | (x1 >> 4);
+    y_raw = (y3 << 12) | (y2 << 4) | (y1 >> 4);
+    z_raw = (z3 << 12) | (z2 << 4) | (z1 >> 4);
+
+    if (x_raw & 0x00080000) x_raw |= 0xFFF00000;
+    if (y_raw & 0x00080000) y_raw |= 0xFFF00000;
+    if (z_raw & 0x00080000) z_raw |= 0xFFF00000;
+  }
 }
 
 void ADXL_Task(void * pvParameters) {
