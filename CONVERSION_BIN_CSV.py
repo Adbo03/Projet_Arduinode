@@ -3,11 +3,23 @@ import csv
 import os
 import math
 import shutil
-
-# --- CONFIGURATION ---
-SD_CARD_PATH = "D:/"
+import ctypes
 
 SAMPLE_SIZE = 16
+
+def get_removable_drives():
+    """Détecte dynamiquement toutes les lettres de lecteurs de type 'Amovible' (clés USB, cartes SD)."""
+    drives = []
+    bitmask = ctypes.windll.kernel32.GetLogicalDrives()
+    
+    for letter in range(26):
+        if bitmask & (1 << letter):
+            drive_letter = f"{chr(65 + letter)}:\\"
+
+            # Disques amovibles = 2 (Clés USB, Cartes SD)
+            if ctypes.windll.kernel32.GetDriveTypeW(drive_letter) == 2:
+                drives.append(drive_letter)
+    return drives
 
 def process_file(bin_path, csv_path):
     """Effectue la conversion d'un fichier binaire unique en CSV."""
@@ -103,16 +115,28 @@ def process_batch(save_mode="CSV + BIN"):
     if save_mode in ["BIN", "CSV + BIN"]:
         os.makedirs("DATARAW", exist_ok=True)
 
-    # Recherche de tous les fichiers .bin à la racine du répertoire cible
-    all_files = os.listdir(SD_CARD_PATH)
-    bin_files = [f for f in all_files if f.lower().endswith('.bin') and os.path.isfile(os.path.join(SD_CARD_PATH, f))]
+    # --- DÉTECTION AUTOMATIQUE DE LA CARTE SD ---
+    removable_drives = get_removable_drives()
+    sd_card_path = None
+    bin_files = []
 
-    if not bin_files:
-        print("Aucun fichier binaire (.bin) trouvé dans la carte SD.")
+    for drive in removable_drives:
+        try:
+            all_files = os.listdir(drive)
+            files = [f for f in all_files if f.lower().endswith('.bin') and f.lower().startswith('data') and os.path.isfile(os.path.join(drive, f))]
+            if files:
+                sd_card_path = drive
+                bin_files = files
+                break 
+        except Exception:
+            continue
+    
+    if not sd_card_path:
+        print("Erreur : Aucun périphérique amovible contenant des fichiers .bin n'a été trouvé.")
         return
 
     for index, filename in enumerate(bin_files, start=1):
-        bin_path = os.path.join(SD_CARD_PATH, filename)
+        bin_path = os.path.join(sd_card_path, filename)
         
         # Génération du nom du fichier CSV correspondant
         name_without_ext = os.path.splitext(filename)[0]
