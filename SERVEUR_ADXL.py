@@ -10,6 +10,13 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 import matplotlib.animation as animation
 import math 
+import sys
+
+try:
+    from winrt.windows.devices.radios import Radio, RadioKind, RadioState
+except ImportError:
+    print("Erreur : Veuillez installer le package requis avec : pip install winrt-Windows.Devices.Radios")
+    sys.exit(1)
 
 # --- PARAMETRAGE ---
 UUID_SERVICE_ARDUINODE = "19b10000-e8f2-537e-4f6c-d104768a1214"
@@ -48,6 +55,7 @@ z_data = deque([0.0]*WINDOW_SIZE, maxlen=WINDOW_SIZE)
 latest_pitch = 0.0
 latest_roll = 0.0
 
+name_arduinode = ""
 client_Arduinode = None
 client_Source = None
 ble_loop = None
@@ -113,16 +121,30 @@ async def discover_by_uuid():
 
     return mac_arduinode, mac_source
 
+async def toggle_radio(type_radio, status=True):
+    """ Permet d'activer ou de desactiver le WiFI (ou le Bluetooth) """
+
+    radios = await Radio.get_radios_async()
+    
+    for radio in radios:
+        if radio.kind == type_radio:    
+            new_state = RadioState.ON if status else RadioState.OFF
+            
+            if radio.state != new_state:
+                await radio.set_state_async(new_state)
+            
+            break
+
 async def run_ble():
     global client_Arduinode, client_Source, ble_running, btnRecord, BLE_ENABLE, wifi_collect
-    global ble_initial_state, needs_ui_sync
+    global ble_initial_state, needs_ui_sync, name_arduinode
 
     while ble_running:
 
         if not BLE_ENABLE:
             await asyncio.sleep(1)
             continue
-        
+            
         MAC_ARDUINODE, MAC_SOURCE = await discover_by_uuid()
         
         if client_Arduinode is None:
@@ -151,14 +173,14 @@ async def run_ble():
         print("Tentative de connexion aux cartes trouvées...")
         
         try:
-
             wifi_collect = False
 
             if client_Arduinode is None:
                 client_1 = BleakClient(MAC_ARDUINODE, disconnected_callback=on_disconnect)
                 await client_1.connect()
                 client_Arduinode = client_1
-                print("Connecté à Arduinode !")
+                name_arduinode = client_1.name
+                print("Connecté à "+ name_arduinode)
 
             if connect_source and client_Source is None:
                 client_2 = BleakClient(MAC_SOURCE)
@@ -374,7 +396,6 @@ def change_source_freq(label):
             ble_loop
         )
 
-
 def toggle_recording(event):
     global btnRecord, btnStream, is_recording, is_streaming
 
@@ -521,7 +542,7 @@ def launch_wifi_collect(event):
             ble_loop
         )
         wifi_collect = True
-        start_collect()
+        start_collect(name_arduinode+"_WIFI")
 
 def on_limits_changed(ax):
     global axes_changed
@@ -529,7 +550,7 @@ def on_limits_changed(ax):
 
 # --- Affichage (Matplotlib) ---
 fig, ax1 = plt.subplots(figsize=(10, 6))
-plt.subplots_adjust(left=0.25, right=0.75, bottom = 0.25) 
+plt.subplots_adjust(left=0.25, right=0.75, bottom = 0.25)
 
 # Boutons  
 raxBLE = plt.axes([0.02, 0.79, 0.15, 0.12], facecolor="#1934e278", title="Recherche Bluetooth")
@@ -623,6 +644,8 @@ def update_plot(frame):
         needs_ui_sync = False
         block_ble_writes = True  # Bloque l'envoi d'ordres BLE pendant la mise à jour de l'IHM
         try:
+            fig.suptitle(name_arduinode, fontsize=16, fontweight='bold')
+
             radioRange.set_active(ble_initial_state['range'])
             radioFrequency.set_active(ble_initial_state['freq'])
 
@@ -734,6 +757,10 @@ if __name__ == "__main__":
     
     def start_ble():
         asyncio.set_event_loop(ble_loop)
+
+        ble_loop.run_until_complete(toggle_radio(RadioKind.BLUETOOTH))
+        ble_loop.run_until_complete(toggle_radio(RadioKind.WI_FI))
+
         ble_loop.run_until_complete(run_ble())
 
     threading.Thread(target=start_ble, daemon=True).start()
