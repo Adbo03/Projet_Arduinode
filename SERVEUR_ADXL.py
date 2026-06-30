@@ -2,6 +2,7 @@ from collections import deque
 from matplotlib.widgets import RadioButtons, Button
 from bleak import BleakClient, BleakScanner
 from CONVERSION_BIN_CSV import process_batch
+from DATA_COLLECT_WIFI import start_collect
 import asyncio
 import threading
 import struct
@@ -39,6 +40,7 @@ ignore_ui_events = False
 generating_impulsions = False
 axes_changed = False
 connect_source = False
+wifi_collect = False
 
 x_data = deque([0.0]*WINDOW_SIZE, maxlen=WINDOW_SIZE)
 y_data = deque([0.0]*WINDOW_SIZE, maxlen=WINDOW_SIZE)
@@ -89,7 +91,9 @@ def notification_handler(sender, data):
             pass
 
 async def discover_by_uuid():
-    print("Recherche automatique des cartes...")
+
+    if not wifi_collect:
+        print("Recherche automatique des cartes...")
     
     devices_dict = await BleakScanner.discover(timeout=5.0, return_adv=True)
     
@@ -110,7 +114,7 @@ async def discover_by_uuid():
     return mac_arduinode, mac_source
 
 async def run_ble():
-    global client_Arduinode, client_Source, ble_running, btnRecord, BLE_ENABLE
+    global client_Arduinode, client_Source, ble_running, btnRecord, BLE_ENABLE, wifi_collect
     global ble_initial_state, needs_ui_sync
 
     while ble_running:
@@ -123,7 +127,10 @@ async def run_ble():
         
         if client_Arduinode is None:
             if not MAC_ARDUINODE:
-                print("Aucun Arduinode à portée. Nouvelle tentative dans 5 secondes...")
+
+                if not wifi_collect:
+                    print("Aucun Arduinode à portée. Nouvelle tentative dans 5 secondes...")
+                
                 await asyncio.sleep(5)
                 continue
 
@@ -132,7 +139,10 @@ async def run_ble():
         if client_Source is None:
             if connect_source:
                 if not MAC_SOURCE:
-                    print("Source introuvable. Nouvelle tentative dans 5 secondes...")
+
+                    if not wifi_collect:
+                        print("Source introuvable. Nouvelle tentative dans 5 secondes...")
+                    
                     await asyncio.sleep(5)
                     continue
                 
@@ -141,6 +151,8 @@ async def run_ble():
         print("Tentative de connexion aux cartes trouvées...")
         
         try:
+
+            wifi_collect = False
 
             if client_Arduinode is None:
                 client_1 = BleakClient(MAC_ARDUINODE, disconnected_callback=on_disconnect)
@@ -364,7 +376,7 @@ def change_source_freq(label):
 
 
 def toggle_recording(event):
-    global btnRecord, is_recording
+    global btnRecord, btnStream, is_recording, is_streaming
 
     if not is_recording:
         is_recording = True
@@ -375,6 +387,14 @@ def toggle_recording(event):
         btnRecord.label.set_text("Arrêter acquisition")
         btnRecord.color = "#e22200"
         btnRecord.hovercolor = "#d22200"
+
+        # Reinitialisation du bouton si le mode 'STREAM' etait activé
+        if is_streaming:
+            is_streaming = False
+
+            btnStream.label.set_text("Lancer stream")
+            btnStream.color = "#00aeff"
+            btnStream.hovercolor = "#0299de"
 
         if client_Arduinode and not block_ble_writes:
             asyncio.run_coroutine_threadsafe(
@@ -401,7 +421,7 @@ def toggle_recording(event):
     fig.canvas.draw_idle() 
 
 def toggle_stream(event):
-    global btnStream, is_streaming
+    global btnStream, btnRecord, is_streaming, is_recording
 
     if not is_streaming:
         is_streaming = True
@@ -409,6 +429,17 @@ def toggle_stream(event):
         btnStream.label.set_text("Arrêter stream")
         btnStream.color = "#e22200"
         btnStream.hovercolor = "#d22200"
+
+        # Reinitialisation du bouton si le mode "ENREGISTREMENT" etait activé
+        if is_recording:
+            is_recording = False
+    
+            raxRange.set_facecolor("#1934e278")
+            raxFrequency.set_facecolor("#1934e278")
+
+            btnRecord.label.set_text("Lancer acquisition")
+            btnRecord.color = "#ffb300"
+            btnRecord.hovercolor = "#df9e05"
 
         if client_Arduinode and not block_ble_writes:
             asyncio.run_coroutine_threadsafe(
@@ -481,6 +512,17 @@ def toggle_connect_src(label):
 def launch_extraction(event):
     process_batch(SAVE_MODE)
 
+def launch_wifi_collect(event):
+    global wifi_collect
+
+    if client_Arduinode and not block_ble_writes:
+        asyncio.run_coroutine_threadsafe(
+            client_Arduinode.write_gatt_char(UUID_MODE, bytearray([3]), response=False), 
+            ble_loop
+        )
+        wifi_collect = True
+        start_collect()
+
 def on_limits_changed(ax):
     global axes_changed
     axes_changed = True
@@ -505,6 +547,7 @@ radioFrequency.on_clicked(change_frequency)
 raxSave = plt.axes([0.02, 0.08, 0.15, 0.12], facecolor = "#1934e278", title="Sauvegarde PC")
 radioSave = RadioButtons(raxSave, ('CSV', 'BIN', 'CSV + BIN'))
 radioSave.on_clicked(change_save)
+radioSave.set_active(2)
 
 raxConnect_src = plt.axes([0.80, 0.79, 0.15, 0.12], facecolor="#1934e278", title="Connexion Source")
 radioConnect_src = RadioButtons(raxConnect_src, ('Activer', 'Désactiver'))
@@ -538,6 +581,12 @@ btnExtract = Button(axExtract, 'Extraire sur PC')
 btnExtract.on_clicked(launch_extraction)
 btnExtract.color = "#ffff07"
 btnExtract.hovercolor = "#d5d502"
+
+axExtractWifi = plt.axes([0.80, 0.07, 0.15, 0.05])
+btnExtractWifi = Button(axExtractWifi, 'Collecte WiFi')
+btnExtractWifi.on_clicked(launch_wifi_collect)
+btnExtractWifi.color = "#c907ff"
+btnExtractWifi.hovercolor = "#a706d3"
 
 # Graphe des accélérations 
 ax1.set_title("Accélération (g)")

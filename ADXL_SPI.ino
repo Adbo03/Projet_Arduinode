@@ -5,6 +5,8 @@
 #include <math.h>
 #include <stdlib.h>
 #include <map>
+#include <WiFi.h>
+#include <WebServer.h>
 
 #define TRUE    1
 #define FALSE   0
@@ -19,9 +21,10 @@
 #define PPS_PIN 2
 
 // Modes
-#define SBY     0
-#define LIVE    1
-#define RECORD  2
+#define SBY             0
+#define LIVE            1
+#define RECORD          2
+#define WIFI_COLLECT    3
 
 // Plages de mesure
 #define _2g   0
@@ -68,6 +71,7 @@ SdFat sd;
 SdFile file;
 TinyGPSPlus gps;
 hw_timer_t * timerSample = NULL;
+WebServer server(80);
 
 const int tabHz[11] = {4000, 2000, 1000, 500, 250, 125, 62.5, 31.25, 15.625, 7.813, 3.906};
 volatile uint8_t currentMode = SBY; 
@@ -94,18 +98,20 @@ NimBLECharacteristic* pModeChar = NULL;
 NimBLECharacteristic* pRangeChar = NULL;
 NimBLECharacteristic* pFrequencyChar = NULL;
 
-
 volatile bool deviceConnected = false;
 bool wasConnected = false;
 volatile bool modeWritten = false;
 volatile bool rangeWritten = false;
 volatile bool freqWritten = false;
+volatile bool wifiStarted = false;
 
 int32_t x_raw = 0;
 int32_t y_raw = 0;
 int32_t z_raw = 0;
 
 SemaphoreHandle_t timerSampleFlag;
+
+/* - - - Fonctions callbacks pour gérer les intéractions avec l'IHM BLE - - - */
 
 class MyServerCallbacks: public NimBLEServerCallbacks {
   public:
@@ -176,6 +182,8 @@ class FreqCallbacks: public NimBLECharacteristicCallbacks {
       }
 };
 
+/* - - - Gestionnaires d'interruptions - - - */
+
 void IRAM_ATTR Sample_handler() {
   BaseType_t xHigherPriorityTaskWoken = pdFALSE;
   xSemaphoreGiveFromISR(timerSampleFlag, &xHigherPriorityTaskWoken);
@@ -187,6 +195,8 @@ void IRAM_ATTR Sample_handler() {
 void IRAM_ATTR PPS_handler() {
   pps_micros = micros(); 
 }
+
+/* - - - Lecture et formattage des données de l'ADXL - - - */
 
 void ADXL_ReadRaw(){
 
@@ -264,6 +274,105 @@ void writeRegister(uint8_t reg, uint8_t value) {
   SPI.transfer((reg << 1) | 0x00);
   SPI.transfer(value);
   digitalWrite(ADXL_CS, HIGH);
+}
+
+/* - - - Fonctions de configuration et de gestion pour l'envoi des données en WIFI - - - */
+
+void handleListFiles() {
+  String fileList = "";
+  FsFile root;
+  FsFile file;
+  
+  if (!root.open("/")) {
+    server.send(500, "text/plain", "Erreur : Impossible d'ouvrir la racine SD");
+    return;
+  }
+
+  while (file.openNext(&root, O_RDONLY)) {
+    char name[100];
+    file.getName(name, sizeof(name));
+    
+    if (!file.isDir()) {
+      String filename = String(name);
+      
+      if (filename.endsWith(".bin")) {
+        fileList += filename + "\n";
+      }
+    }
+    file.close(); 
+  }
+
+  root.close();
+  server.send(200, "text/plain", fileList);
+}
+
+void handleDownloadFile() {
+  if (!server.hasArg("name")) {
+    server.send(400, "text/plain", "Missing 'name' parameter");
+    return;
+  }
+  String filename = server.arg("name");
+  if (!filename.startsWith("/")) filename = "/" + filename;
+
+  FsFile dataFile;
+
+  if (dataFile.open(filename.c_str(), O_RDONLY)) {
+    uint64_t fileSize = dataFile.size();
+    
+    server.setContentLength(fileSize);
+    server.send(200, "application/octet-stream", "");
+
+    // Envoi du contenu du fichier binaire par blocs (Buffer)
+    uint8_t buffer[512]; 
+    while (dataFile.available()) {
+      int bytesRead = dataFile.read(buffer, sizeof(buffer));
+      if (bytesRead > 0) {
+        server.client().write(buffer, bytesRead);
+      }
+    }
+
+    dataFile.close();
+  }
+  else {
+    server.send(404, "text/plain", "File not found");
+  }
+}
+
+void handleDeleteFile() {
+  if (!server.hasArg("name")) {
+    server.send(400, "text/plain", "Missing 'name' parameter");
+    return;
+  }
+  String filename = server.arg("name");
+  if (!filename.startsWith("/")) filename = "/" + filename;
+
+  if (sd.exists(filename.c_str())) {
+    if (sd.remove(filename.c_str())) {
+      server.send(200, "text/plain", "DONE : File removed");
+    } 
+    else {
+      server.send(500, "text/plain", "Error : File failed to be erased");
+    }
+  } 
+  
+  else { server.send(404, "text/plain", "File not found");}
+}
+
+void handleReboot() {
+  server.send(200, "text/plain", "Rebooting...");
+  delay(500);
+  ESP.restart();
+}
+
+void setupWiFiAndServer() {
+  WiFi.softAP("Arduinode_WiFi", "password123");
+  
+  server.on("/list", HTTP_GET, handleListFiles);
+  server.on("/download", HTTP_GET, handleDownloadFile);
+  server.on("/delete", HTTP_GET, handleDeleteFile);
+  server.on("/reboot", HTTP_GET, handleReboot);
+  
+  server.begin();
 }
 
 void setup() {
@@ -373,6 +482,7 @@ void setup() {
 
 void loop() {
 
+  /* - - - Recupération des données GPS - - - */
   while (Serial1.available() > 0) {
 
     if (gps.encode(Serial1.read())) {
@@ -383,7 +493,7 @@ void loop() {
     }
   }
 
-
+  /* - - - Mise à jour des modes et paramètres - - - */
   if (deviceConnected) {
     
     if(modeWritten){
@@ -397,12 +507,11 @@ void loop() {
       bufIdx = 0;
       fullFlag = false;
 
-      if(currentMode == LIVE){
-        if(file.isOpen()) 
-          file.close();
+      if(file.isOpen()) 
+        file.close();
 
-        Serial.println("Début du stream...");
-      }
+      if(currentMode == LIVE) Serial.println("Début du stream...");
+      
       
       else if(currentMode == RECORD){
 
@@ -444,6 +553,13 @@ void loop() {
             file.println(); 
           }
         }
+      }
+
+      else if(currentMode == WIFI_COLLECT){
+        // Passage du BLE au WiFi
+        NimBLEDevice::deinit(true); 
+        delay(200);
+        wifiStarted = false;
       }
 
       timerAlarmEnable(timerSample);
@@ -597,7 +713,7 @@ void loop() {
       timerAlarmEnable(timerSample);
     }
 
-    // Mise à jour BLE
+    /* - - - Envoi des données en BLE en mode LIVE - - - */
     if(currentMode == LIVE && fullFlag){ 
       int bufToSave = (activeBuf == 0) ? 2 : activeBuf - 1;
       fullFlag = false;
@@ -609,7 +725,7 @@ void loop() {
     }
   }
 
-  // Mode Enregistrement 
+  /* - - - Sauvegarde SD en mode RECORD - - - */
   if(currentMode == RECORD && fullFlag){
     int bufToSave = (activeBuf == 0) ? 1 : 0;
     
@@ -620,12 +736,24 @@ void loop() {
 
   }
 
-  // Gestion automatique de la reconnexion (Advertising)
+  else if(currentMode == WIFI_COLLECT){
+
+    if(!wifiStarted){
+      setupWiFiAndServer();
+      wifiStarted = true;
+      delay(500);
+    }
+
+    server.handleClient();
+  }
+
+  /* - - - Gestion automatique de la reconnexion - - - */
   if (!deviceConnected && wasConnected) {
     delay(500); 
     NimBLEDevice::startAdvertising();
     wasConnected = false;
   }
+
   if (deviceConnected && !wasConnected) {
     wasConnected = true;
   }
