@@ -7,6 +7,7 @@
 #include <map>
 #include <WiFi.h>
 #include <WebServer.h>
+#include <esp_now.h>
 
 #define TRUE    1
 #define FALSE   0
@@ -55,6 +56,20 @@ struct Sample_SD {
 struct Sample_LIVE {
   int32_t x, y, z;
 };
+
+// Gestion de la retransmission des modifications BLE (ESP-NOW)
+struct __attribute__((packed)) SyncPacket {
+  uint32_t msgId;    
+  uint8_t mode;      
+  uint8_t range;     
+  uint8_t frequency; 
+};
+
+uint32_t lastReceivedMsgId = 0;       
+volatile bool hasNewConfigFromESPNow = false; 
+SyncPacket pendingConfig;            
+
+uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
 // Buffers 
 const int BUF_SIZE_SD = 32;
@@ -111,6 +126,74 @@ int32_t z_raw = 0;
 
 SemaphoreHandle_t timerSampleFlag;
 
+uint8_t arduinodeID = 0;
+String nodeName = "Arduinode_0";
+
+void configureArduinodeID() {
+  uint8_t mac[6];
+  WiFi.macAddress(mac);
+  
+  // Utilisation de l'adresse MAC pour générer des identifiant uniques
+  if (mac[5] == 0x48) { arduinodeID = 0; }
+  else if (mac[5] == 0x98) { arduinodeID = 1; }
+  else if (mac[5] == 0xBF) { arduinodeID = 2; }
+  else { 
+    arduinodeID = mac[5]; 
+  }
+  
+  nodeName = "Arduinode_" + String(arduinodeID);
+  Serial.println(nodeName);
+}
+
+/* - - - Fonctions pour gérer la retransmission aux autres arduinodes - - - */
+
+void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
+  if (len == sizeof(SyncPacket)) {
+    SyncPacket packet;
+    memcpy(&packet, incomingData, sizeof(SyncPacket));
+
+    if (packet.msgId > lastReceivedMsgId) {
+      pendingConfig = packet;
+      hasNewConfigFromESPNow = true; 
+    }
+  }
+}
+
+void broadcastConfiguration(uint8_t mode, uint8_t range, uint8_t freq) {
+  lastReceivedMsgId++; 
+  
+  SyncPacket packet;
+  packet.msgId = lastReceivedMsgId;
+  packet.mode = mode;
+  packet.range = range;
+  packet.frequency = freq;
+
+  esp_now_send(broadcastAddress, (uint8_t *) &packet, sizeof(packet));
+}
+
+void initEspNow() {
+  WiFi.mode(WIFI_STA);
+
+  if (esp_now_init() != ESP_OK) {
+    Serial.println("Erreur : echec de l'initialisation de ESP-NOW");
+    return;
+  }
+
+  esp_now_register_recv_cb(OnDataRecv);
+
+  esp_now_peer_info_t peerInfo;
+  memset(&peerInfo, 0, sizeof(peerInfo));
+  memcpy(peerInfo.peer_addr, broadcastAddress, 6);
+  peerInfo.channel = 0;  // Canal WiFi par défaut
+  peerInfo.encrypt = false;
+  
+  if (esp_now_add_peer(&peerInfo) != ESP_OK){
+    Serial.println("Erreur : echec de l'ajout du peer broadcast");
+  } else {
+    Serial.println("ESP-NOW configuré et prêt pour la communication inter-arduinodes");
+  }
+}
+
 /* - - - Fonctions callbacks pour gérer les intéractions avec l'IHM BLE - - - */
 
 class MyServerCallbacks: public NimBLEServerCallbacks {
@@ -134,6 +217,7 @@ class ModeCallbacks: public NimBLECharacteristicCallbacks {
           if(currentMode != (uint8_t)value[0]){
             currentMode = (uint8_t)value[0];
             modeWritten = true;
+            broadcastConfiguration(currentMode, currentRange, currentFreq);
           }
 
           else{
@@ -153,6 +237,7 @@ class RangeCallbacks: public NimBLECharacteristicCallbacks {
           if(currentRange != (uint8_t)value[0]){
             currentRange = (uint8_t)value[0];
             rangeWritten = true;
+            broadcastConfiguration(currentMode, currentRange, currentFreq);
           }
 
           else{
@@ -172,6 +257,7 @@ class FreqCallbacks: public NimBLECharacteristicCallbacks {
           if(currentFreq != (uint8_t)value[0]){
             currentFreq = (uint8_t)value[0];
             freqWritten = true;
+            broadcastConfiguration(currentMode, currentRange, currentFreq);
           }
 
           else{
@@ -365,7 +451,9 @@ void handleReboot() {
 }
 
 void setupWiFiAndServer() {
-  WiFi.softAP("Arduinode_WiFi", "password123");
+  String ssid = nodeName + "_WIFI";
+
+  WiFi.softAP(ssid.c_str(), "password123");
   
   server.on("/list", HTTP_GET, handleListFiles);
   server.on("/download", HTTP_GET, handleDownloadFile);
@@ -380,7 +468,7 @@ void setup() {
   Serial1.begin(9600, SERIAL_8N1, D0, D1); // UART GPS
   delay(1000); 
 
-  // Configuration GPS de la fréquence à 10 Hz
+  // Configuration de la fréquence du module GPS à 10 Hz
   Serial1.println("$PMTK220,100*2F");
 
   Serial1.println("$PMTK314,0,1,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0*28");
@@ -408,8 +496,13 @@ void setup() {
   
   xTaskCreatePinnedToCore(ADXL_Task, "ADXL_Task", 4096, NULL, 10, NULL, 1);
 
+  delay(500);
+
+  configureArduinodeID();
+  initEspNow();
+
   // Configuration BLE 
-  NimBLEDevice::init("Arduinode");
+  NimBLEDevice::init(nodeName.c_str());
   NimBLEDevice::setMTU(512); 
 
   pServer = NimBLEDevice::createServer();
@@ -482,6 +575,36 @@ void setup() {
 
 void loop() {
 
+  /* - - - Synchronisation inter-arduinodes (ESP-NOW) - - - */
+  if (hasNewConfigFromESPNow) {
+    hasNewConfigFromESPNow = false; 
+    lastReceivedMsgId = pendingConfig.msgId; 
+
+    if(currentMode != pendingConfig.mode){
+      modeWritten = true;
+
+      // Inutile de mettre les arduinodes non connectées à l'IHM en mode LIVE
+      if(pendingConfig.mode == LIVE){
+        currentMode = SBY;
+      }
+      else{
+        currentMode = pendingConfig.mode;
+      }
+    }
+
+    if(currentRange != pendingConfig.range){
+      rangeWritten = true;
+      currentRange = pendingConfig.range;
+    }
+
+    if(currentFreq != pendingConfig.frequency){
+      freqWritten = true;
+      currentFreq = pendingConfig.frequency;
+    }
+
+    esp_now_send(broadcastAddress, (uint8_t *) &pendingConfig, sizeof(pendingConfig));
+  }
+
   /* - - - Recupération des données GPS - - - */
   while (Serial1.available() > 0) {
 
@@ -494,106 +617,29 @@ void loop() {
   }
 
   /* - - - Mise à jour des modes et paramètres - - - */
-  if (deviceConnected) {
+  
+  if(modeWritten){
+    modeWritten = false;
     
-    if(modeWritten){
-      modeWritten = false;
-      
-      pModeChar->setValue((uint8_t*) &currentMode, (size_t) sizeof(currentMode));
+    pModeChar->setValue((uint8_t*) &currentMode, (size_t) sizeof(currentMode));
 
-      timerAlarmDisable(timerSample);
+    timerAlarmDisable(timerSample);
 
-      activeBuf = 0;
-      bufIdx = 0;
-      fullFlag = false;
+    activeBuf = 0;
+    bufIdx = 0;
+    fullFlag = false;
 
-      if(file.isOpen()) 
-        file.close();
+    if(file.isOpen()) 
+      file.close();
 
-      if(currentMode == LIVE) Serial.println("Début du stream...");
-      
-      
-      else if(currentMode == RECORD){
+    if(currentMode == LIVE) Serial.println("Début du stream...");
+    
+    
+    else if(currentMode == RECORD){
 
-        Serial.println("Début du stockage des données...");
+      Serial.println("Début du stockage des données...");
 
-        if (!file.isOpen()) {
-
-          snprintf(hours, sizeof(hours), "%02d", gps.time.hour());
-          snprintf(minutes, sizeof(minutes), "%02d", gps.time.minute());
-          snprintf(seconds, sizeof(seconds),"%02d", gps.time.second());
-
-          if(currentRange == _2g) sprintf(interval, "2g");
-          else if(currentRange == _4g) sprintf(interval, "4g");
-          else if(currentRange == _8g) sprintf(interval, "8g");
-
-          snprintf(title, sizeof(title), "data_%s_%s_%s_UTC_%s.bin", hours, minutes, seconds, interval);
-
-          if (!file.open(title, O_RDWR | O_CREAT | O_AT_END)) {
-            Serial.println("Echec critique : impossible de créer le fichier binaire.");
-          }
-          
-          else{
-          
-            file.print("GPS:"); 
-            file.print(lastLat, 6); 
-            file.print(","); 
-            file.print(lastLon, 6);
-            file.print(",");
-
-            file.print(hours);
-            file.print(':');
-            file.print(minutes);
-            file.print(':');
-            file.print(seconds);
-            file.print(",");
-
-            file.print(interval);
-            
-            file.println(); 
-          }
-        }
-      }
-
-      else if(currentMode == WIFI_COLLECT){
-        // Passage du BLE au WiFi
-        NimBLEDevice::deinit(true); 
-        delay(200);
-        wifiStarted = false;
-      }
-
-      timerAlarmEnable(timerSample);
-    }
-
-    if(rangeWritten){
-      rangeWritten = false;
-      
-      pRangeChar->setValue((uint8_t*) &currentRange, (size_t) sizeof(currentRange));
-
-      timerAlarmDisable(timerSample);
-
-      if(currentRange == _2g){
-        writeRegister(REG_POWER_CTL, 0x01);
-        writeRegister(REG_RANGE, 0x01); 
-        writeRegister(REG_POWER_CTL, 0x00);
-      }
-
-      else if(currentRange == _4g){
-        writeRegister(REG_POWER_CTL, 0x01);
-        writeRegister(REG_RANGE, 0x02); 
-        writeRegister(REG_POWER_CTL, 0x00);
-      }
-
-      else if(currentRange == _8g){
-        writeRegister(REG_POWER_CTL, 0x01);
-        writeRegister(REG_RANGE, 0x03); 
-        writeRegister(REG_POWER_CTL, 0x00);
-      }
-
-      if(currentMode == RECORD){
-
-        // Ouverture d'un nouveau fichier pour ne pas mélanger les intervalles de mesures
-        if(file.isOpen()) file.close();
+      if (!file.isOpen()) {
 
         snprintf(hours, sizeof(hours), "%02d", gps.time.hour());
         snprintf(minutes, sizeof(minutes), "%02d", gps.time.minute());
@@ -610,7 +656,7 @@ void loop() {
         }
         
         else{
-    
+        
           file.print("GPS:"); 
           file.print(lastLat, 6); 
           file.print(","); 
@@ -628,105 +674,181 @@ void loop() {
           
           file.println(); 
         }
-        
       }
-      
-      timerAlarmEnable(timerSample);
     }
 
-    if(freqWritten){
-      freqWritten = false;
-      
-      pFrequencyChar->setValue((uint8_t*) &currentFreq, (size_t) sizeof(currentFreq));
-
-      timerAlarmDisable(timerSample);
-
-      if(currentFreq == _4000Hz){
-        writeRegister(REG_POWER_CTL, 0x01);
-        writeRegister(REG_FILTER, 0x00); 
-        writeRegister(REG_POWER_CTL, 0x00);
-      }
-
-      else if(currentFreq == _2000Hz){
-        writeRegister(REG_POWER_CTL, 0x01);
-        writeRegister(REG_FILTER, 0x01); 
-        writeRegister(REG_POWER_CTL, 0x00);
-      }
-
-      else if(currentFreq == _1000Hz){
-        writeRegister(REG_POWER_CTL, 0x01);
-        writeRegister(REG_FILTER, 0x02); 
-        writeRegister(REG_POWER_CTL, 0x00);
-      }
-
-      else if(currentFreq == _500Hz){
-        writeRegister(REG_POWER_CTL, 0x01);
-        writeRegister(REG_FILTER, 0x03); 
-        writeRegister(REG_POWER_CTL, 0x00);
-      }
-
-      else if(currentFreq == _250Hz){
-        writeRegister(REG_POWER_CTL, 0x01);
-        writeRegister(REG_FILTER, 0x04); 
-        writeRegister(REG_POWER_CTL, 0x00);
-      }
-
-      else if(currentFreq == _125Hz){
-        writeRegister(REG_POWER_CTL, 0x01);
-        writeRegister(REG_FILTER, 0x05); 
-        writeRegister(REG_POWER_CTL, 0x00);
-      }
-
-      else if(currentFreq == _62_5Hz){
-        writeRegister(REG_POWER_CTL, 0x01);
-        writeRegister(REG_FILTER, 0x06); 
-        writeRegister(REG_POWER_CTL, 0x00);
-      }
-
-      else if(currentFreq == _31_25Hz){
-        writeRegister(REG_POWER_CTL, 0x01);
-        writeRegister(REG_FILTER, 0x07); 
-        writeRegister(REG_POWER_CTL, 0x00);
-      }
-
-      else if(currentFreq == _15_625Hz){
-        writeRegister(REG_POWER_CTL, 0x01);
-        writeRegister(REG_FILTER, 0x08); 
-        writeRegister(REG_POWER_CTL, 0x00);
-      }
-
-      else if(currentFreq == _7_813Hz){
-        writeRegister(REG_POWER_CTL, 0x01);
-        writeRegister(REG_FILTER, 0x09); 
-        writeRegister(REG_POWER_CTL, 0x00);
-      }
-
-      else if(currentFreq == _3_906Hz){
-        writeRegister(REG_POWER_CTL, 0x01);
-        writeRegister(REG_FILTER, 0x0A); 
-        writeRegister(REG_POWER_CTL, 0x00);
-      }
-
-      TICK_SAMPLE_US = 1000000/tabHz[currentFreq];
-
-      timerAlarmWrite(timerSample, TICK_SAMPLE_US, true);
-      timerAlarmEnable(timerSample);
+    else if(currentMode == WIFI_COLLECT){
+      // Passage du BLE au WiFi
+      NimBLEDevice::deinit(true); 
+      delay(200);
+      wifiStarted = false;
     }
 
-    /* - - - Envoi des données en BLE en mode LIVE - - - */
-    if(currentMode == LIVE && fullFlag){ 
-      int bufToSave = (activeBuf == 0) ? 2 : activeBuf - 1;
-      fullFlag = false;
-
-      uint8_t* ptrBuf = (uint8_t*) bufferLIVE[bufToSave];
-
-      pRawDataChar->setValue(ptrBuf, std::max(1, (int) (BUF_SIZE_LIVE >> currentFreq))*12);
-      pRawDataChar->notify();
-    }
+    timerAlarmEnable(timerSample);
   }
 
+  if(rangeWritten){
+    rangeWritten = false;
+    
+    pRangeChar->setValue((uint8_t*) &currentRange, (size_t) sizeof(currentRange));
+
+    timerAlarmDisable(timerSample);
+
+    if(currentRange == _2g){
+      writeRegister(REG_POWER_CTL, 0x01);
+      writeRegister(REG_RANGE, 0x01); 
+      writeRegister(REG_POWER_CTL, 0x00);
+    }
+
+    else if(currentRange == _4g){
+      writeRegister(REG_POWER_CTL, 0x01);
+      writeRegister(REG_RANGE, 0x02); 
+      writeRegister(REG_POWER_CTL, 0x00);
+    }
+
+    else if(currentRange == _8g){
+      writeRegister(REG_POWER_CTL, 0x01);
+      writeRegister(REG_RANGE, 0x03); 
+      writeRegister(REG_POWER_CTL, 0x00);
+    }
+
+    if(currentMode == RECORD){
+
+      // Ouverture d'un nouveau fichier pour ne pas mélanger les intervalles de mesures
+      if(file.isOpen()) file.close();
+
+      snprintf(hours, sizeof(hours), "%02d", gps.time.hour());
+      snprintf(minutes, sizeof(minutes), "%02d", gps.time.minute());
+      snprintf(seconds, sizeof(seconds),"%02d", gps.time.second());
+
+      if(currentRange == _2g) sprintf(interval, "2g");
+      else if(currentRange == _4g) sprintf(interval, "4g");
+      else if(currentRange == _8g) sprintf(interval, "8g");
+
+      snprintf(title, sizeof(title), "data_%s_%s_%s_UTC_%s.bin", hours, minutes, seconds, interval);
+
+      if (!file.open(title, O_RDWR | O_CREAT | O_AT_END)) {
+        Serial.println("Echec critique : impossible de créer le fichier binaire.");
+      }
+      
+      else{
+  
+        file.print("GPS:"); 
+        file.print(lastLat, 6); 
+        file.print(","); 
+        file.print(lastLon, 6);
+        file.print(",");
+
+        file.print(hours);
+        file.print(':');
+        file.print(minutes);
+        file.print(':');
+        file.print(seconds);
+        file.print(",");
+
+        file.print(interval);
+        
+        file.println(); 
+      }
+      
+    }
+    
+    timerAlarmEnable(timerSample);
+  }
+
+  if(freqWritten){
+    freqWritten = false;
+    
+    pFrequencyChar->setValue((uint8_t*) &currentFreq, (size_t) sizeof(currentFreq));
+
+    timerAlarmDisable(timerSample);
+
+    if(currentFreq == _4000Hz){
+      writeRegister(REG_POWER_CTL, 0x01);
+      writeRegister(REG_FILTER, 0x00); 
+      writeRegister(REG_POWER_CTL, 0x00);
+    }
+
+    else if(currentFreq == _2000Hz){
+      writeRegister(REG_POWER_CTL, 0x01);
+      writeRegister(REG_FILTER, 0x01); 
+      writeRegister(REG_POWER_CTL, 0x00);
+    }
+
+    else if(currentFreq == _1000Hz){
+      writeRegister(REG_POWER_CTL, 0x01);
+      writeRegister(REG_FILTER, 0x02); 
+      writeRegister(REG_POWER_CTL, 0x00);
+    }
+
+    else if(currentFreq == _500Hz){
+      writeRegister(REG_POWER_CTL, 0x01);
+      writeRegister(REG_FILTER, 0x03); 
+      writeRegister(REG_POWER_CTL, 0x00);
+    }
+
+    else if(currentFreq == _250Hz){
+      writeRegister(REG_POWER_CTL, 0x01);
+      writeRegister(REG_FILTER, 0x04); 
+      writeRegister(REG_POWER_CTL, 0x00);
+    }
+
+    else if(currentFreq == _125Hz){
+      writeRegister(REG_POWER_CTL, 0x01);
+      writeRegister(REG_FILTER, 0x05); 
+      writeRegister(REG_POWER_CTL, 0x00);
+    }
+
+    else if(currentFreq == _62_5Hz){
+      writeRegister(REG_POWER_CTL, 0x01);
+      writeRegister(REG_FILTER, 0x06); 
+      writeRegister(REG_POWER_CTL, 0x00);
+    }
+
+    else if(currentFreq == _31_25Hz){
+      writeRegister(REG_POWER_CTL, 0x01);
+      writeRegister(REG_FILTER, 0x07); 
+      writeRegister(REG_POWER_CTL, 0x00);
+    }
+
+    else if(currentFreq == _15_625Hz){
+      writeRegister(REG_POWER_CTL, 0x01);
+      writeRegister(REG_FILTER, 0x08); 
+      writeRegister(REG_POWER_CTL, 0x00);
+    }
+
+    else if(currentFreq == _7_813Hz){
+      writeRegister(REG_POWER_CTL, 0x01);
+      writeRegister(REG_FILTER, 0x09); 
+      writeRegister(REG_POWER_CTL, 0x00);
+    }
+
+    else if(currentFreq == _3_906Hz){
+      writeRegister(REG_POWER_CTL, 0x01);
+      writeRegister(REG_FILTER, 0x0A); 
+      writeRegister(REG_POWER_CTL, 0x00);
+    }
+
+    TICK_SAMPLE_US = 1000000/tabHz[currentFreq];
+
+    timerAlarmWrite(timerSample, TICK_SAMPLE_US, true);
+    timerAlarmEnable(timerSample);
+  }
+
+  /* - - - Envoi des données en BLE en mode LIVE - - - */
+  if(currentMode == LIVE && fullFlag){ 
+    int bufToSave = (activeBuf == 0) ? 2 : activeBuf - 1;
+    fullFlag = false;
+
+    uint8_t* ptrBuf = (uint8_t*) bufferLIVE[bufToSave];
+
+    pRawDataChar->setValue(ptrBuf, std::max(1, (int) (BUF_SIZE_LIVE >> currentFreq))*12);
+    pRawDataChar->notify();
+  }
+  
+
   /* - - - Sauvegarde SD en mode RECORD - - - */
-  if(currentMode == RECORD && fullFlag){
+  else if(currentMode == RECORD && fullFlag){
     int bufToSave = (activeBuf == 0) ? 1 : 0;
     
     if(file.isOpen()){
@@ -736,6 +858,7 @@ void loop() {
 
   }
 
+  /* - - - Envoi en WIFI des données SD - - - */
   else if(currentMode == WIFI_COLLECT){
 
     if(!wifiStarted){
