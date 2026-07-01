@@ -1,8 +1,6 @@
 from collections import deque
 from matplotlib.widgets import RadioButtons, Button
 from bleak import BleakClient, BleakScanner
-from CONVERSION_BIN_CSV import process_batch
-from DATA_COLLECT_WIFI import start_collect
 import asyncio
 import threading
 import struct
@@ -11,6 +9,9 @@ import matplotlib.ticker as ticker
 import matplotlib.animation as animation
 import math 
 import sys
+import time
+from CONVERSION_BIN_CSV import process_batch
+from DATA_COLLECT_WIFI import start_collect
 
 try:
     from winrt.windows.devices.radios import Radio, RadioKind, RadioState
@@ -542,7 +543,10 @@ def launch_wifi_collect(event):
             ble_loop
         )
         wifi_collect = True
-        start_collect(name_arduinode+"_WIFI")
+
+        time.sleep(1)
+
+        start_collect()
 
 def on_limits_changed(ax):
     global axes_changed

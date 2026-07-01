@@ -4,6 +4,7 @@ import shutil
 import threading
 import time 
 import subprocess
+import re
 from CONVERSION_BIN_CSV import process_file 
 
 def configure_wifi(ssid, password):
@@ -95,95 +96,134 @@ def connect_to_wifi(ssid_cible):
         print(f"Erreur : {e}")
     return False
 
-def collect_data_wifi(ssid, save_mode="CSV + BIN"):
+def scan_arduinode_wifis():
+    """ Balaye les réseaux Wi-Fi environnants et extrait tous les SSIDs qui correspondent au format 'Arduinode_X_WIFI'."""
+    arduinode_list = []
+    try:   
+
+        while arduinode_list == []:
+            result = subprocess.run(
+                "netsh wlan show networks", 
+                shell=True, 
+                capture_output=True, 
+                text=True, 
+                encoding="cp1252"
+            )
+            
+            if result.returncode != 0:
+                print("\nL'outil Windows (netsh) a rencontré un problème :")
+                erreur_windows = result.stderr.strip() if result.stderr else result.stdout.strip()
+                print(f"-> {erreur_windows}")
+                print("Pensez à vérifier que l'accès à la localisation est autorisé dans les réglages.\n")
+                return []
+
+            pattern = r"Arduinode_\d+_WIFI"
+            matches = re.findall(pattern, result.stdout, re.IGNORECASE)
+            arduinode_list = list(set(matches))
+        
+    except Exception as e:
+        print(f"Erreur scan Wi-Fi : {e}")
+        
+    return arduinode_list
+
+def collect_data_wifi(save_mode="CSV + BIN"):
     """ Télécharge tous les fichiers de l'ESP32 par Wi-Fi, les supprime de la SD, puis applique la conversion sélectionnée dans l'IHM."""
 
     PWD_ARDUINODE = "password123"
     IP_ESP = "192.168.4.1"
     url_root = f"http://{IP_ESP}"
 
-    connected_to_node = configure_wifi(ssid, PWD_ARDUINODE)
+    available_arduinodes = scan_arduinode_wifis()
+
+    if not available_arduinodes:
+        print("Aucune carte Arduinode n'a été détecté (WIFI). Collecte annulée.")
+        return 
     
-    if not connected_to_node:
-        print("Erreur : impossible de basculer sur le WiFi de la carte. Opération annulée.")
+    print(f"{len(available_arduinodes)} carte(s) détectée(s). Début de la collecte...")
     
-    try:
-
-        # Récupération de la liste des fichiers
-        print("Lecture de la carte SD via Wi-Fi...")
-        response = requests.get(f"{url_root}/list", timeout=5)
-        if response.status_code != 200 or not response.text.strip():
-            print("Aucun fichier binaire à récupérer (Carte SD vide).")
-            return
-
-        files = response.text.strip().split("\n")
-        print(f"{len(files)} fichier(s) détecté(s) sur l'Arduinode.")
-
-        temp_folder = "./DUMP_WIFI"
-        csv_folder = f"./DATACSV/{files[0][:11]}"
-        raw_folder = f"./DATARAW/{files[0][:11]}"
-
-        os.makedirs(temp_folder, exist_ok=True)
-        os.makedirs(csv_folder, exist_ok=True)
-        os.makedirs(raw_folder, exist_ok=True)
-
-        for file in files:
-            file_name = file.lstrip('/')
-            path_temp_bin = os.path.join(temp_folder, file_name)
-            
-            print(f"\n Téléchargement de : {file_name}...")
-            
-            with requests.get(f"{url_root}/download", params={"name": file}, stream=True) as r:
-                r.raise_for_status()
-                with open(path_temp_bin, 'wb') as f:
-                    for chunk in r.iter_content(chunk_size=8192):
-                        f.write(chunk)
-            
-            if os.path.exists(path_temp_bin) and os.path.getsize(path_temp_bin) > 0:
-                print(f"Fichier {file_name} sauvegardé en local.")
-                
-                # Suppression du fichier de la carte SD
-                del_resp = requests.get(f"{url_root}/delete", params={"name": file})
-                if del_resp.status_code == 200:
-                    print(f"Supprimé avec succès de la carte SD.")
-                else:
-                    print(f"Erreur de suppression sur la SD (fichier conservé sur la carte).")
-                
-                # Conversion du fichier
-                name_without_ext = os.path.splitext(file_name)[0]
-                path_csv = os.path.join(csv_folder, f"{name_without_ext}.csv")
-                path_bin = os.path.join(raw_folder, file_name)
-                
-                print(f"Type(s) de fichiers de sauvegardé(s) : [{save_mode}]")
-                
-                if save_mode == "CSV":
-                    process_file(path_temp_bin, path_csv)
-                    os.remove(path_temp_bin)
-                    
-                elif save_mode == "BIN":
-                    shutil.move(path_temp_bin, path_bin)
-                    
-                elif save_mode == "CSV + BIN":
-                    process_file(path_temp_bin, path_csv)
-                    shutil.move(path_temp_bin, path_bin)
-            else:
-                print(f"Erreur critique lors du téléchargement de {file_name}. Le fichier est probablement vide -> Traitement annulé pour ce fichier.")
-
-        print("\nFin des opérations de téléchargement et de conversion.")
+    for ssid in available_arduinodes:
+        connected_to_node = configure_wifi(ssid, PWD_ARDUINODE)
         
-        # Demande de redémarrage à l'ESP32 pour qu'il rebascule automatiquement en BLE
-        print("Demande de réinitialisation à l'Arduinode (Retour au mode BLE)...")
-        requests.get(f"{url_root}/reboot", timeout=2)
+        if not connected_to_node:
+            print(f"Erreur : impossible de basculer sur le WiFi de {ssid}. Passage à la suivante.")
+            continue
 
-    except Exception as e:
-        print(f"Erreur lors de la collecte Wi-Fi : {e}")
+        try:
 
-    finally:
+            # Récupération de la liste des fichiers
+            response = requests.get(f"{url_root}/list", timeout=5)
+            if response.status_code != 200 or not response.text.strip():
+                print("Aucun fichier binaire à récupérer (Carte SD vide).")
+                return
 
-        if connected_to_node:
-            subprocess.run("netsh wlan disconnect", shell=True, stdout=subprocess.DEVNULL)
+            files = response.text.strip().split("\n")
+            print(f"[{ssid}] {len(files)} fichier(s) détecté(s) sur l'Arduinode.")
 
-def start_collect(ssid, save_mode="CSV + BIN"):
+            temp_folder = "./DUMP_WIFI"
+            csv_folder = f"./DATACSV/{files[0][:11]}"
+            raw_folder = f"./DATARAW/{files[0][:11]}"
+
+            os.makedirs(temp_folder, exist_ok=True)
+            os.makedirs(csv_folder, exist_ok=True)
+            os.makedirs(raw_folder, exist_ok=True)
+
+            for file in files:
+                file_name = file.lstrip('/')
+                path_temp_bin = os.path.join(temp_folder, file_name)
+                
+                print(f"\n [{ssid}] Téléchargement de : {file_name}...")
+                
+                with requests.get(f"{url_root}/download", params={"name": file}, stream=True) as r:
+                    r.raise_for_status()
+                    with open(path_temp_bin, 'wb') as f:
+                        for chunk in r.iter_content(chunk_size=8192):
+                            f.write(chunk)
+                
+                if os.path.exists(path_temp_bin) and os.path.getsize(path_temp_bin) > 0:
+                    print(f"Fichier {file_name} sauvegardé en local.")
+                    
+                    # Suppression du fichier de la carte SD
+                    del_resp = requests.get(f"{url_root}/delete", params={"name": file})
+                    if del_resp.status_code == 200:
+                        print(f"Supprimé avec succès de la carte SD.")
+                    else:
+                        print(f"Erreur de suppression sur la SD (fichier conservé sur la carte).")
+                    
+                    # Conversion du fichier
+                    name_without_ext = os.path.splitext(file_name)[0]
+                    path_csv = os.path.join(csv_folder, f"{name_without_ext}.csv")
+                    path_bin = os.path.join(raw_folder, file_name)
+                    
+                    if save_mode == "CSV":
+                        process_file(path_temp_bin, path_csv)
+                        os.remove(path_temp_bin)
+                        
+                    elif save_mode == "BIN":
+                        shutil.move(path_temp_bin, path_bin)
+                        
+                    elif save_mode == "CSV + BIN":
+                        process_file(path_temp_bin, path_csv)
+                        shutil.move(path_temp_bin, path_bin)
+                else:
+                    print(f"Erreur critique lors du téléchargement de {file_name}. Le fichier est probablement vide -> Traitement annulé pour ce fichier.")
+
+            print(f"\nFin des opérations pour {ssid}.")
+            print(f"Demande de réinitialisation à {ssid} (réactivation du BLE)...")
+            
+            try:
+                requests.get(f"{url_root}/reboot", timeout=2)
+            except requests.RequestException:
+                pass
+            
+            time.sleep(2)
+
+        except Exception as e:
+            print(f"Erreur lors de la collecte sur {ssid} : {e}")
+
+    if connected_to_node:
+        subprocess.run("netsh wlan disconnect", shell=True, stdout=subprocess.DEVNULL)
+
+def start_collect(save_mode="CSV + BIN"):
     """Déclenche la récupération dans un thread pour préserver l'IHM."""
-    t = threading.Thread(target= collect_data_wifi, args=(ssid, save_mode,), daemon=True)
+    t = threading.Thread(target= collect_data_wifi, args=(save_mode,), daemon=True)
     t.start()
