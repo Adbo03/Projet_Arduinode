@@ -97,7 +97,7 @@ volatile int32_t TICK_SAMPLE_US = 1000000/tabHz[currentFreq];
 
 volatile uint32_t pps_micros = 0;
 float lastLat = 0, lastLon = 0;
-char hours[3], minutes[3], seconds[3], title[25];
+char hours[3], minutes[3], seconds[3], title[32];
 char interval[3];
 
 // Adresses des registres
@@ -155,6 +155,7 @@ void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
     if (packet.msgId > lastReceivedMsgId) {
       pendingConfig = packet;
       hasNewConfigFromESPNow = true; 
+      Serial.println("Nouvelle configuration reçue !");
     }
   }
 }
@@ -649,7 +650,7 @@ void loop() {
         else if(currentRange == _4g) sprintf(interval, "4g");
         else if(currentRange == _8g) sprintf(interval, "8g");
 
-        snprintf(title, sizeof(title), "data_%s_%s_%s_UTC_%s.bin", hours, minutes, seconds, interval);
+        snprintf(title, sizeof(title), "%s_%s_%s_%s_UTC_%s.bin", nodeName, hours, minutes, seconds, interval);
 
         if (!file.open(title, O_RDWR | O_CREAT | O_AT_END)) {
           Serial.println("Echec critique : impossible de créer le fichier binaire.");
@@ -710,47 +711,6 @@ void loop() {
       writeRegister(REG_POWER_CTL, 0x01);
       writeRegister(REG_RANGE, 0x03); 
       writeRegister(REG_POWER_CTL, 0x00);
-    }
-
-    if(currentMode == RECORD){
-
-      // Ouverture d'un nouveau fichier pour ne pas mélanger les intervalles de mesures
-      if(file.isOpen()) file.close();
-
-      snprintf(hours, sizeof(hours), "%02d", gps.time.hour());
-      snprintf(minutes, sizeof(minutes), "%02d", gps.time.minute());
-      snprintf(seconds, sizeof(seconds),"%02d", gps.time.second());
-
-      if(currentRange == _2g) sprintf(interval, "2g");
-      else if(currentRange == _4g) sprintf(interval, "4g");
-      else if(currentRange == _8g) sprintf(interval, "8g");
-
-      snprintf(title, sizeof(title), "data_%s_%s_%s_UTC_%s.bin", hours, minutes, seconds, interval);
-
-      if (!file.open(title, O_RDWR | O_CREAT | O_AT_END)) {
-        Serial.println("Echec critique : impossible de créer le fichier binaire.");
-      }
-      
-      else{
-  
-        file.print("GPS:"); 
-        file.print(lastLat, 6); 
-        file.print(","); 
-        file.print(lastLon, 6);
-        file.print(",");
-
-        file.print(hours);
-        file.print(':');
-        file.print(minutes);
-        file.print(':');
-        file.print(seconds);
-        file.print(",");
-
-        file.print(interval);
-        
-        file.println(); 
-      }
-      
     }
     
     timerAlarmEnable(timerSample);
