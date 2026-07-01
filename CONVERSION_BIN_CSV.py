@@ -110,11 +110,6 @@ def process_file(bin_path, csv_path):
 
 def process_batch(save_mode="CSV + BIN"):
     
-    if save_mode in ["CSV", "CSV + BIN"]:
-        os.makedirs("DATACSV", exist_ok=True)
-    if save_mode in ["BIN", "CSV + BIN"]:
-        os.makedirs("DATARAW", exist_ok=True)
-
     # --- DÉTECTION AUTOMATIQUE DE LA CARTE SD ---
     removable_drives = get_removable_drives()
     sd_card_path = None
@@ -123,7 +118,7 @@ def process_batch(save_mode="CSV + BIN"):
     for drive in removable_drives:
         try:
             all_files = os.listdir(drive)
-            files = [f for f in all_files if f.lower().endswith('.bin') and f.lower().startswith('data') and os.path.isfile(os.path.join(drive, f))]
+            files = [f for f in all_files if f.lower().endswith('.bin') and f.lower().startswith('arduinode') and os.path.isfile(os.path.join(drive, f))]
             if files:
                 sd_card_path = drive
                 bin_files = files
@@ -138,11 +133,18 @@ def process_batch(save_mode="CSV + BIN"):
     for index, filename in enumerate(bin_files, start=1):
         bin_path = os.path.join(sd_card_path, filename)
         
-        # Génération du nom du fichier CSV correspondant
+
+        # Génération du nom du fichier CSV et création des répertoires
         name_without_ext = os.path.splitext(filename)[0]
+
+        if save_mode in ["CSV", "CSV + BIN"]:
+            os.makedirs(f"DATACSV/{name_without_ext[:11]}", exist_ok=True)
+        if save_mode in ["BIN", "CSV + BIN"]:
+            os.makedirs(f"DATARAW/{name_without_ext[:11]}", exist_ok=True)
+
         csv_filename = f"{name_without_ext}.csv"
-        csv_path = os.path.join("DATACSV", csv_filename)
-        dest_raw_path = os.path.join("DATARAW", filename)
+        csv_path = os.path.join(f"DATACSV/{name_without_ext[:11]}", csv_filename)
+        dest_raw_path = os.path.join(f"DATARAW/{name_without_ext[:11]}", filename)
 
         print(f"[{index}/{len(bin_files)}] Traitement de : {filename}")
         
