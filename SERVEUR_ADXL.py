@@ -25,6 +25,7 @@ UUID_RAWDATA = "19b10001-e8f2-537e-4f6c-d104768a1214"
 UUID_MODE = "19b10002-e8f2-537e-4f6c-d104768a1214"
 UUID_RANGE = "19b10003-e8f2-537e-4f6c-d104768a1214"
 UUID_ADXL_FREQUENCY = "19b10004-e8f2-537e-4f6c-d104768a1214"
+UUID_BROADCAST = "19b10005-e8f2-537e-4f6c-d104768a1214"
 
 UUID_SERVICE_SOURCE = "18b10000-e8f2-537e-4f6c-d104768a1214"
 UUID_SOURCE_MODE = "18b10001-e8f2-537e-4f6c-d104768a1214"
@@ -35,16 +36,14 @@ SCALE_FACTORS = [256000.0, 128000.0, 64000.0]
 RANGE = 0
 ADXL_FREQUENCY = 0
 SAVE_MODE = "CSV + BIN"
-BLE_ENABLE = True
 SOURCE_FREQUENCY = 0
 WINDOW_SIZE = 4000
 
 needs_ui_sync = False
-ble_initial_state = {'mode': 0, 'range': 0, 'freq': 0, 's_freq': 0, 's_status': 0}
+ble_initial_state = {'mode': 0, 'range': 0, 'freq': 0, 'broadcast':0, 's_freq': 0, 's_status': 0}
 block_ble_writes = False
 is_recording = False
 is_streaming = False
-ignore_ui_events = False 
 generating_impulsions = False
 axes_changed = False
 connect_source = False
@@ -64,7 +63,7 @@ ble_running = True
 reconnect_delay = 5
 
 def notification_handler(sender, data):
-    """Décode les nouvelles données reçues et les stocke dans les buffer"""
+    """Décode les nouvelles données reçues et les stocke dans les buffers"""
     global latest_pitch, latest_roll
 
     sender_uuid = sender.uuid.lower()
@@ -137,15 +136,11 @@ async def toggle_radio(type_radio, status=True):
             break
 
 async def run_ble():
-    global client_Arduinode, client_Source, ble_running, btnRecord, BLE_ENABLE, wifi_collect
+    global client_Arduinode, client_Source, ble_running, btnRecord, wifi_collect
     global ble_initial_state, needs_ui_sync, name_arduinode
 
     while ble_running:
-
-        if not BLE_ENABLE:
-            await asyncio.sleep(1)
-            continue
-            
+    
         MAC_ARDUINODE, MAC_SOURCE = await discover_by_uuid()
         
         if client_Arduinode is None:
@@ -194,11 +189,13 @@ async def run_ble():
                 mode_bytes = await client_1.read_gatt_char(UUID_MODE)
                 range_bytes = await client_1.read_gatt_char(UUID_RANGE)
                 freq_bytes = await client_1.read_gatt_char(UUID_ADXL_FREQUENCY)
+                broadcast_bytes = await client_1.read_gatt_char(UUID_BROADCAST)
 
                 ble_initial_state = {
                     'mode': mode_bytes[0],
                     'range': range_bytes[0],
-                    'freq': freq_bytes[0]
+                    'freq': freq_bytes[0],
+                    'broadcast' : broadcast_bytes[0]
                 }
 
                 if connect_source:
@@ -213,12 +210,9 @@ async def run_ble():
             except Exception as read_error:
                 print("Échec de la lecture initiale des configurations :", read_error)
             
-            if BLE_ENABLE:
-                print("Démarrage du flux de données...")
-                await client_1.start_notify(UUID_RAWDATA, notification_handler)
-            else:
-                print("Connexion établie, mais communication en pause.")
-            
+            print("Démarrage du flux de données...")
+            await client_1.start_notify(UUID_RAWDATA, notification_handler)
+
             # Boucle de maintien de la connexion tant que les clients sont connectés
             while client_1.is_connected and ble_running and (not connect_source or (connect_source and client_2 is not None and client_2.is_connected)):
                 await asyncio.sleep(1)
@@ -254,10 +248,7 @@ def on_disconnect(client):
     print("Déconnecté de la carte")
 
 def change_range(label):
-    global RANGE, block_ble_writes, ignore_ui_events
-
-    if ignore_ui_events:
-        return
+    global RANGE, block_ble_writes
     
     dict_modes = {"-2g/+2g": 0, "-4g/+4g": 1, "-8g/+8g": 2}
     val = dict_modes[label]
@@ -279,11 +270,8 @@ def change_range(label):
         )
 
 def change_frequency(label):
-    global WINDOW_SIZE, ADXL_FREQUENCY, x_data, y_data, z_data, time_axis, ignore_ui_events, block_ble_writes
+    global WINDOW_SIZE, ADXL_FREQUENCY, x_data, y_data, z_data, time_axis, block_ble_writes
 
-    if ignore_ui_events:
-        return
-    
     dict_modes = {"4000 Hz": 0, 
                   "2000 Hz": 1, 
                   "1000 Hz": 2, 
@@ -335,35 +323,8 @@ def change_save(label):
     global SAVE_MODE
     SAVE_MODE = label
 
-def change_ble_state(label):
-    global BLE_ENABLE
-    BLE_ENABLE = (label == 'Activer')
-
-    if client_Arduinode and client_Arduinode.is_connected:
-        if BLE_ENABLE:
-            print("\nReprise de la communication (Lecture)...\n")
-            asyncio.run_coroutine_threadsafe(
-                client_Arduinode.start_notify(UUID_RAWDATA, notification_handler), 
-                ble_loop
-            )
-        else:
-            print("\nCommunication en pause (Stop)...\n")
-            asyncio.run_coroutine_threadsafe(
-                client_Arduinode.stop_notify(UUID_RAWDATA), 
-                ble_loop
-            )
-
-    else:
-        if BLE_ENABLE:
-            print("\nRecherche Bluetooth relancée...\n")
-        else:
-            print("\nBluetooth désactivé. Déconnexion en cours...\n")
-
 def change_source_freq(label):
-    global SOURCE_FREQUENCY, block_ble_writes, ignore_ui_events
-
-    if ignore_ui_events:
-        return
+    global SOURCE_FREQUENCY, block_ble_writes
     
     dict_modes = {"10 Hz": 0, 
                   "20 Hz": 1, 
@@ -531,6 +492,20 @@ def toggle_connect_src(label):
     else:
         connect_source = False
 
+def toggle_broadcast(label):
+
+    if label == 'Activer':
+        val = 1
+
+    elif label == 'Désactiver':
+        val = 0
+
+    if client_Arduinode:
+        asyncio.run_coroutine_threadsafe(
+            client_Arduinode.write_gatt_char(UUID_BROADCAST, bytearray([val]), response=False), 
+            ble_loop
+        )
+
 def launch_extraction(event):
     process_batch(SAVE_MODE)
 
@@ -557,9 +532,9 @@ fig, ax1 = plt.subplots(figsize=(10, 6))
 plt.subplots_adjust(left=0.25, right=0.75, bottom = 0.25)
 
 # Boutons  
-raxBLE = plt.axes([0.02, 0.79, 0.15, 0.12], facecolor="#1934e278", title="Recherche Bluetooth")
-radioBLE = RadioButtons(raxBLE, ('Activer', 'Désactiver'))
-radioBLE.on_clicked(change_ble_state)
+raxBroadcast = plt.axes([0.02, 0.79, 0.15, 0.12], facecolor="#1934e278", title="Broadcast arduinodes")
+radioBroadcast = RadioButtons(raxBroadcast, ('Désactiver', 'Activer'))
+radioBroadcast.on_clicked(toggle_broadcast)
 
 raxRange = plt.axes([0.02, 0.60, 0.15, 0.12], facecolor = "#1934e278", title="Plage de mesure")
 radioRange = RadioButtons(raxRange, ('-2g/+2g', '-4g/+4g', '-8g/+8g'))
@@ -652,6 +627,7 @@ def update_plot(frame):
 
             radioRange.set_active(ble_initial_state['range'])
             radioFrequency.set_active(ble_initial_state['freq'])
+            radioBroadcast.set_active(ble_initial_state["broadcast"])
 
             if connect_source:
                 radioSourcefreq.set_active(ble_initial_state["source_freq"])

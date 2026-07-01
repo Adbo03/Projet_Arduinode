@@ -45,6 +45,9 @@
 #define _7_813Hz  9
 #define _3_906Hz  10
 
+#define ON   1
+#define OFF  0
+
 // Bus SPI dédié pour communiquer avec le lecteur SD
 SPIClass sdSPI(HSPI);
 
@@ -92,6 +95,7 @@ const int tabHz[11] = {4000, 2000, 1000, 500, 250, 125, 62.5, 31.25, 15.625, 7.8
 volatile uint8_t currentMode = SBY; 
 volatile uint8_t currentRange = _2g;
 volatile uint8_t currentFreq = _4000Hz;
+volatile uint8_t broadcast = ON;
 
 volatile int32_t TICK_SAMPLE_US = 1000000/tabHz[currentFreq];
 
@@ -112,6 +116,7 @@ NimBLECharacteristic* pRawDataChar = NULL;
 NimBLECharacteristic* pModeChar = NULL;
 NimBLECharacteristic* pRangeChar = NULL;
 NimBLECharacteristic* pFrequencyChar = NULL;
+NimBLECharacteristic* pBroadcastChar = NULL;
 
 volatile bool deviceConnected = false;
 bool wasConnected = false;
@@ -218,7 +223,8 @@ class ModeCallbacks: public NimBLECharacteristicCallbacks {
           if(currentMode != (uint8_t)value[0]){
             currentMode = (uint8_t)value[0];
             modeWritten = true;
-            broadcastConfiguration(currentMode, currentRange, currentFreq);
+
+            if(broadcast) broadcastConfiguration(currentMode, currentRange, currentFreq);
           }
 
           else{
@@ -238,7 +244,8 @@ class RangeCallbacks: public NimBLECharacteristicCallbacks {
           if(currentRange != (uint8_t)value[0]){
             currentRange = (uint8_t)value[0];
             rangeWritten = true;
-            broadcastConfiguration(currentMode, currentRange, currentFreq);
+            
+            if(broadcast) broadcastConfiguration(currentMode, currentRange, currentFreq);
           }
 
           else{
@@ -258,13 +265,26 @@ class FreqCallbacks: public NimBLECharacteristicCallbacks {
           if(currentFreq != (uint8_t)value[0]){
             currentFreq = (uint8_t)value[0];
             freqWritten = true;
-            broadcastConfiguration(currentMode, currentRange, currentFreq);
+
+            if(broadcast) broadcastConfiguration(currentMode, currentRange, currentFreq);
           }
 
           else{
             freqWritten = false;
           }
 
+        }
+      }
+};
+
+class BroadcastCallbacks: public NimBLECharacteristicCallbacks {
+    public:
+      void onWrite(NimBLECharacteristic* pCharacteristic, NimBLEConnInfo& connInfo) {
+        std::string value = pCharacteristic->getValue();
+
+        if (value.length() > 0){
+          broadcast = (uint8_t)value[0];
+          pBroadcastChar->setValue((uint8_t*) &broadcast, (size_t) sizeof(broadcast));
         }
       }
 };
@@ -531,9 +551,15 @@ void setup() {
                 NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE
               );
 
+  pBroadcastChar = pService->createCharacteristic(
+                "19b10005-e8f2-537e-4f6c-d104768a1214",
+                NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE
+              );
+
   pModeChar->setCallbacks(new ModeCallbacks());
   pRangeChar->setCallbacks(new RangeCallbacks());
   pFrequencyChar->setCallbacks(new FreqCallbacks());
+  pBroadcastChar->setCallbacks(new BroadcastCallbacks());
 
   pService->start();
 
@@ -570,6 +596,7 @@ void setup() {
   pModeChar->setValue((uint8_t*) &currentMode, (size_t) sizeof(currentMode));
   pRangeChar->setValue((uint8_t*) &currentRange, (size_t) sizeof(currentRange));
   pFrequencyChar->setValue((uint8_t*) &currentFreq, (size_t) sizeof(currentFreq));
+  pBroadcastChar->setValue((uint8_t*) &broadcast, (size_t) sizeof(broadcast));
 
   Serial.println("Système prêt.");
 }
