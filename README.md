@@ -1,4 +1,4 @@
-# Node-sismique-3C
+# Projet Arduinode
 Développement d'un noeud sismique 3 composantes
 
 Arduinode : ADXL355Z, NANO ESP32, lecteur carte SD (JOY-IT), Ultimate GPS Breakout v3 (adafruit)
