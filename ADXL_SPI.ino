@@ -8,9 +8,10 @@
 #include <WiFi.h>
 #include <WebServer.h>
 #include <esp_now.h>
+#include <set>
 
-#define TRUE    1
-#define FALSE   0
+#define ON   1
+#define OFF  0
 
 // Paramétrage
 #define ADXL_CS   10
@@ -45,8 +46,12 @@
 #define _7_813Hz  9
 #define _3_906Hz  10
 
-#define ON   1
-#define OFF  0
+// Types de messages ESP NOW
+#define CMD_PING      0  
+#define CMD_CONFIG    1  
+#define REPLY_PONG    2  
+#define REPLY_ACK     3  
+
 
 // Bus SPI dédié pour communiquer avec le lecteur SD
 SPIClass sdSPI(HSPI);
@@ -62,17 +67,23 @@ struct Sample_LIVE {
 
 // Gestion de la retransmission des modifications BLE (ESP-NOW)
 struct __attribute__((packed)) SyncPacket {
-  uint32_t msgId;    
+  uint32_t msgId;  
+  uint8_t type;        
+  uint8_t originMac[6];
   uint8_t mode;      
   uint8_t range;     
   uint8_t frequency; 
 };
 
+SyncPacket pendingConfig;            
 uint32_t lastReceivedMsgId = 0;       
 volatile bool hasNewConfigFromESPNow = false; 
-SyncPacket pendingConfig;            
-
 uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+
+std::set<String> discoveredNodes;  
+std::set<String> ackedNodes;       
+std::set<String> forwardedReplies; 
+volatile bool isInitiator = false;
 
 // Buffers 
 const int BUF_SIZE_SD = 32;
@@ -117,6 +128,7 @@ NimBLECharacteristic* pModeChar = NULL;
 NimBLECharacteristic* pRangeChar = NULL;
 NimBLECharacteristic* pFrequencyChar = NULL;
 NimBLECharacteristic* pBroadcastChar = NULL;
+NimBLECharacteristic* pSyncChar = NULL;
 
 volatile bool deviceConnected = false;
 bool wasConnected = false;
@@ -151,25 +163,103 @@ void configureArduinodeID() {
 }
 
 /* - - - Fonctions pour gérer la retransmission aux autres arduinodes - - - */
+String macToString(const uint8_t* mac) {
+  char buf[20];
+  snprintf(buf, sizeof(buf), "%02X:%02X:%02X:%02X:%02X:%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+  return String(buf);
+}
 
 void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
   if (len == sizeof(SyncPacket)) {
     SyncPacket packet;
     memcpy(&packet, incomingData, sizeof(SyncPacket));
+    String originMacStr = macToString(packet.originMac);
 
-    if (packet.msgId > lastReceivedMsgId) {
-      pendingConfig = packet;
-      hasNewConfigFromESPNow = true; 
-      Serial.println("Nouvelle configuration reçue !");
+    if (packet.type == CMD_PING || packet.type == CMD_CONFIG) {
+      if (packet.msgId > lastReceivedMsgId) {
+        lastReceivedMsgId = packet.msgId;
+        isInitiator = false;      
+        forwardedReplies.clear(); 
+
+        if (packet.type == CMD_CONFIG) {
+          pendingConfig = packet;
+          hasNewConfigFromESPNow = true;
+          Serial.println("Nouvelle configuration reçue !");
+        } 
+        else {  
+          esp_now_send(broadcastAddress, (uint8_t *) &packet, sizeof(packet));
+        }
+
+        delayMicroseconds(random(2000, 25000));
+
+        SyncPacket reply;
+        reply.msgId = packet.msgId;
+        reply.type = (packet.type == CMD_PING) ? REPLY_PONG : REPLY_ACK;
+        WiFi.macAddress(reply.originMac);
+        reply.mode = currentMode;
+        reply.range = currentRange;
+        reply.frequency = currentFreq;
+
+        esp_now_send(broadcastAddress, (uint8_t *) &reply, sizeof(reply));
+      }
+    }
+    
+    else if (packet.type == REPLY_PONG || packet.type == REPLY_ACK) {
+      if (packet.msgId == lastReceivedMsgId) {
+        
+        if (isInitiator) {
+          if (packet.type == REPLY_PONG) {
+
+            // Pour éviter des envois redondants
+            if(discoveredNodes.insert(originMacStr).second){
+              uint8_t count = discoveredNodes.size() + 1;
+              pSyncChar->setValue(&count, 1);
+              pSyncChar->notify();
+            }
+
+          } 
+          else if (packet.type == REPLY_ACK) {
+            
+            // Pour éviter des envois redondants
+            if(ackedNodes.insert(originMacStr).second){
+              if (discoveredNodes.size() > 0 && discoveredNodes.size() == ackedNodes.size()) {
+                uint8_t successCode = 0xFF;
+                pSyncChar->setValue(&successCode, 1);
+                pSyncChar->notify();
+              }
+            }
+
+          }
+        }
+
+        if (forwardedReplies.find(originMacStr) == forwardedReplies.end()) {
+          forwardedReplies.insert(originMacStr);
+          esp_now_send(broadcastAddress, (uint8_t *) &packet, sizeof(packet));
+        }
+      }
     }
   }
 }
 
-void broadcastConfiguration(uint8_t mode, uint8_t range, uint8_t freq) {
+void broadcastConfiguration(uint8_t type, uint8_t mode, uint8_t range, uint8_t freq) {
   lastReceivedMsgId++; 
+  isInitiator = true; 
   
+  if (type == CMD_PING) {
+    discoveredNodes.clear();
+    ackedNodes.clear();
+  } 
+  
+  else if (type == CMD_CONFIG) {
+    ackedNodes.clear();
+  }
+
+  forwardedReplies.clear();
+
   SyncPacket packet;
   packet.msgId = lastReceivedMsgId;
+  packet.type = type;
+  WiFi.macAddress(packet.originMac);
   packet.mode = mode;
   packet.range = range;
   packet.frequency = freq;
@@ -224,7 +314,7 @@ class ModeCallbacks: public NimBLECharacteristicCallbacks {
             currentMode = (uint8_t)value[0];
             modeWritten = true;
 
-            if(broadcast) broadcastConfiguration(currentMode, currentRange, currentFreq);
+            if(broadcast) broadcastConfiguration(CMD_CONFIG, currentMode, currentRange, currentFreq);
           }
 
           else{
@@ -245,7 +335,7 @@ class RangeCallbacks: public NimBLECharacteristicCallbacks {
             currentRange = (uint8_t)value[0];
             rangeWritten = true;
             
-            if(broadcast) broadcastConfiguration(currentMode, currentRange, currentFreq);
+            if(broadcast) broadcastConfiguration(CMD_CONFIG, currentMode, currentRange, currentFreq);
           }
 
           else{
@@ -266,7 +356,7 @@ class FreqCallbacks: public NimBLECharacteristicCallbacks {
             currentFreq = (uint8_t)value[0];
             freqWritten = true;
 
-            if(broadcast) broadcastConfiguration(currentMode, currentRange, currentFreq);
+            if(broadcast) broadcastConfiguration(CMD_CONFIG, currentMode, currentRange, currentFreq);
           }
 
           else{
@@ -289,6 +379,16 @@ class BroadcastCallbacks: public NimBLECharacteristicCallbacks {
       }
 };
 
+class SyncCallbacks: public NimBLECharacteristicCallbacks {
+    public:
+      void onWrite(NimBLECharacteristic* pCharacteristic, NimBLEConnInfo& connInfo) {
+        std::string value = pCharacteristic->getValue();
+        if (value.length() > 0 && value[0] == 1) {
+          if(broadcast) broadcastConfiguration(CMD_PING, currentMode, currentRange, currentFreq);
+        }
+      }
+};
+
 /* - - - Gestionnaires d'interruptions - - - */
 
 void IRAM_ATTR Sample_handler() {
@@ -306,7 +406,6 @@ void IRAM_ATTR PPS_handler() {
 /* - - - Lecture et formattage des données de l'ADXL - - - */
 
 void ADXL_ReadRaw(){
-
   if((currentMode == LIVE) || (currentMode == RECORD)){
     // 10MHz, Mode 0 (CPOL=0, CPHA=0)
     SPI.beginTransaction(SPISettings(10000000, MSBFIRST, SPI_MODE0));
@@ -484,6 +583,8 @@ void setupWiFiAndServer() {
   server.begin();
 }
 
+
+/* - - - Configuration globale du système - - - */
 void setup() {
   Serial.begin(115200);
   Serial1.begin(9600, SERIAL_8N1, D0, D1); // UART GPS
@@ -556,10 +657,16 @@ void setup() {
                 NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE
               );
 
+  pSyncChar = pService->createCharacteristic(
+                "19b10006-e8f2-537e-4f6c-d104768a1214",
+                NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::NOTIFY
+              );
+
   pModeChar->setCallbacks(new ModeCallbacks());
   pRangeChar->setCallbacks(new RangeCallbacks());
   pFrequencyChar->setCallbacks(new FreqCallbacks());
   pBroadcastChar->setCallbacks(new BroadcastCallbacks());
+  pSyncChar->setCallbacks(new SyncCallbacks());
 
   pService->start();
 

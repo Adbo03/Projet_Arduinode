@@ -26,6 +26,7 @@ UUID_MODE = "19b10002-e8f2-537e-4f6c-d104768a1214"
 UUID_RANGE = "19b10003-e8f2-537e-4f6c-d104768a1214"
 UUID_ADXL_FREQUENCY = "19b10004-e8f2-537e-4f6c-d104768a1214"
 UUID_BROADCAST = "19b10005-e8f2-537e-4f6c-d104768a1214"
+UUID_SYNC = "19b10006-e8f2-537e-4f6c-d104768a1214"
 
 UUID_SERVICE_SOURCE = "18b10000-e8f2-537e-4f6c-d104768a1214"
 UUID_SOURCE_MODE = "18b10001-e8f2-537e-4f6c-d104768a1214"
@@ -56,11 +57,29 @@ latest_pitch = 0.0
 latest_roll = 0.0
 
 name_arduinode = ""
+count_sync = 0
 client_Arduinode = None
 client_Source = None
 ble_loop = None
 ble_running = True
 reconnect_delay = 5
+
+def synchronisation_handler(sender, value):
+    """Permet un recensement des arduinodes actives ainsi qu'une confirmation de la synchronisation de ces dernières."""
+    global count_sync
+
+    sender_uuid = sender.uuid.lower()
+
+    if sender_uuid == UUID_SYNC:
+        if len(value) > 0:
+            status_code = value[0] 
+            
+            if status_code == 0xFF:
+                count_sync += 1
+                print(f"[Synchronisation {count_sync}]      Arduinodes synchronisées !")
+
+            else:
+                print(f"[Recensement]       {status_code} arduinodes détectées sur le terrain.")
 
 def notification_handler(sender, data):
     """Décode les nouvelles données reçues et les stocke dans les buffers"""
@@ -99,9 +118,8 @@ def notification_handler(sender, data):
             pass
 
 async def discover_by_uuid():
-
     if not wifi_collect:
-        print("Recherche automatique des cartes...")
+        print("\nRecherche automatique des cartes...")
     
     devices_dict = await BleakScanner.discover(timeout=5.0, return_adv=True)
     
@@ -137,13 +155,15 @@ async def toggle_radio(type_radio, status=True):
 
 async def run_ble():
     global client_Arduinode, client_Source, ble_running, btnRecord, wifi_collect
-    global ble_initial_state, needs_ui_sync, name_arduinode
+    global ble_initial_state, needs_ui_sync, name_arduinode, count_sync
 
     while ble_running:
-    
+        
         MAC_ARDUINODE, MAC_SOURCE = await discover_by_uuid()
         
         if client_Arduinode is None:
+            count_sync = 0
+
             if not MAC_ARDUINODE:
 
                 if not wifi_collect:
@@ -210,8 +230,13 @@ async def run_ble():
             except Exception as read_error:
                 print("Échec de la lecture initiale des configurations :", read_error)
             
-            print("Démarrage du flux de données...")
             await client_1.start_notify(UUID_RAWDATA, notification_handler)
+            await client_1.start_notify(UUID_SYNC, synchronisation_handler)
+
+            try:
+                await client_1.write_gatt_char(UUID_SYNC, bytearray([1]), response=False)
+            except Exception as sync_error:
+                print("Erreur lors de l'envoi du recensement automatique :", sync_error)
 
             # Boucle de maintien de la connexion tant que les clients sont connectés
             while client_1.is_connected and ble_running and (not connect_source or (connect_source and client_2 is not None and client_2.is_connected)):
@@ -238,7 +263,11 @@ async def run_ble():
         if client_2 and not client_2.is_connected:
             client_Source = None
 
-        if ble_running:
+        if wifi_collect:
+            print("Recherche WiFi des arduinodes activées. Cela peut prendre plusieurs secondes...")
+            await asyncio.sleep(30)
+
+        elif ble_running :
             print(f"Un des appareils n'est pas connecté. Nouvelle tentative dans {reconnect_delay} secondes...")
             await asyncio.sleep(reconnect_delay)
 
@@ -510,6 +539,7 @@ def launch_extraction(event):
     process_batch(SAVE_MODE)
 
 def launch_wifi_collect(event):
+
     global wifi_collect
 
     if client_Arduinode and not block_ble_writes:
@@ -523,12 +553,21 @@ def launch_wifi_collect(event):
 
         start_collect()
 
+def roll_call(event):
+
+    if client_Arduinode:
+        asyncio.run_coroutine_threadsafe(
+            client_Arduinode.write_gatt_char(UUID_SYNC, bytearray([1]), response=False), 
+            ble_loop
+        )
+
 def on_limits_changed(ax):
     global axes_changed
     axes_changed = True
 
 # --- Affichage (Matplotlib) ---
 fig, ax1 = plt.subplots(figsize=(10, 6))
+fig.canvas.manager.set_window_title("ScanEarth")
 plt.subplots_adjust(left=0.25, right=0.75, bottom = 0.25)
 
 # Boutons  
@@ -587,6 +626,12 @@ btnExtractWifi = Button(axExtractWifi, 'Collecte WiFi')
 btnExtractWifi.on_clicked(launch_wifi_collect)
 btnExtractWifi.color = "#c907ff"
 btnExtractWifi.hovercolor = "#a706d3"
+
+axRollCall = plt.axes([0.80, 0.01, 0.15, 0.05])
+btnRollCall = Button(axRollCall, 'Recensement')
+btnRollCall.on_clicked(roll_call)
+btnRollCall.color = "#03e96e"
+btnRollCall.hovercolor = "#05c35e"
 
 # Graphe des accélérations 
 ax1.set_title("Accélération (g)")
