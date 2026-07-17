@@ -64,60 +64,8 @@ ble_loop = None
 ble_running = True
 reconnect_delay = 5
 
-async def source_sync():
-    global needs_ui_sync, ble_initial_state, generating_impulsions
-    
-    await asyncio.sleep(0.5)
 
-    timeout = 10.0  
-    start_time = time.time()
-
-    try:
-        while generating_impulsions and client_Source and client_Source.is_connected:
-            await asyncio.sleep(0.1)
-
-            if time.time() - start_time > timeout:
-                break
-
-            s_mode_bytes = await client_Source.read_gatt_char(UUID_SOURCE_MODE)
-            if s_mode_bytes[0] == 0:
-                break
-
-    except Exception as e:
-        print(f"[Source Sync] Erreur lors de la synchronisation : {e}")
-        
-    finally:
-        await asyncio.sleep(1)
-        generating_impulsions = False
-        ble_initial_state['source_mode'] = 0
-        needs_ui_sync = True
-        
-        
-async def source_automation_sequence():
-    global MODE, is_recording, needs_ui_sync, ble_initial_state, generating_impulsions
-    try:
-        await asyncio.sleep(1)
-
-        print("\n[Auto] Déclenchement de la source...")
-        await client_Source.write_gatt_char(UUID_SOURCE_MODE, bytearray([1]), response=False)
-        
-        generating_impulsions = True
-        ble_initial_state['source_mode'] = 1
-        needs_ui_sync = True
-        
-        await asyncio.sleep(1)
-        
-        print("[Auto] Fin de la capture. Retour au mode SBY pour les Arduinodes.")
-        await client_Arduinode.write_gatt_char(UUID_MODE, bytearray([0]), response=False)
-        
-        is_recording = False
-        generating_impulsions = False
-        ble_initial_state['mode'] = 0
-        ble_initial_state['source_mode'] = 0
-        needs_ui_sync = True
-
-    except Exception as e:
-        print(f"Erreur lors de l'automatisation : {e}")
+# - - - GESTIONNAIRES DES ABONNEMENTS - - - 
 
 async def synchronisation_handler(sender, value):
     """Permet un recensement des arduinodes actives ainsi qu'une confirmation de la synchronisation de ces dernières."""
@@ -171,6 +119,98 @@ def notification_handler(sender, data):
         except ValueError:
             # Sécurité en cas de division par zéro instable
             pass
+
+
+# - - - SEQUENCES SPECIALES - - - 
+
+async def source_sync():
+    global needs_ui_sync, generating_impulsions
+    
+    await asyncio.sleep(0.5)
+
+    timeout = 10.0  
+    start_time = time.time()
+
+    try:
+        while generating_impulsions and client_Source and client_Source.is_connected:
+            await asyncio.sleep(0.1)
+
+            if time.time() - start_time > timeout:
+                break
+
+            s_mode_bytes = await client_Source.read_gatt_char(UUID_SOURCE_MODE)
+            if s_mode_bytes[0] == 0:
+                break
+
+    except Exception as e:
+        print(f"[Source Sync] Erreur lors de la synchronisation : {e}")
+        
+    finally:
+        await asyncio.sleep(1)
+        generating_impulsions = False
+        raxSourcefreq.set_facecolor("#1934e278")
+
+        btnSource.label.set_text("Activer la source")
+        btnSource.color = "#26ff00"
+        btnSource.hovercolor = "#12d900"
+        fig.canvas.draw_idle() 
+        
+        
+async def source_automation_sequence():
+    global is_recording, generating_impulsions
+    try:
+        await asyncio.sleep(1)
+
+        print("\n[Auto] Déclenchement de la source...")
+        await client_Source.write_gatt_char(UUID_SOURCE_MODE, bytearray([1]), response=False)
+        generating_impulsions = True
+        raxSourcefreq.set_facecolor("#9d9d9d")
+
+        btnSource.label.set_text("Source active...")
+        btnSource.color = "#9d9d9d"
+        btnSource.hovercolor = "#9d9d9d"
+        fig.canvas.draw_idle() 
+
+        await asyncio.sleep(1)
+        
+        print("[Auto] Fin de la capture. Retour au mode SBY pour les Arduinodes.\n")
+        await client_Arduinode.write_gatt_char(UUID_MODE, bytearray([0]), response=False)
+
+        timeout = 10.0  
+        start_time = time.time()
+
+        try:
+            while generating_impulsions and client_Source and client_Source.is_connected:
+                await asyncio.sleep(0.1)
+
+                if time.time() - start_time > timeout:
+                    break
+
+                s_mode_bytes = await client_Source.read_gatt_char(UUID_SOURCE_MODE)
+                if s_mode_bytes[0] == 0:
+                    break
+
+        finally:
+            await asyncio.sleep(1)
+            generating_impulsions = False
+            
+            raxSourcefreq.set_facecolor("#1934e278")
+            btnSource.label.set_text("Activer la source")
+            btnSource.color = "#26ff00"
+            btnSource.hovercolor = "#12d900"
+
+            is_recording = False
+
+            raxRange.set_facecolor("#1934e278")
+            raxFrequency.set_facecolor("#1934e278")
+            btnRecord.label.set_text("Lancer acquisition")
+            btnRecord.color = "#ffb300"
+            btnRecord.hovercolor = "#df9e05"
+            
+            fig.canvas.draw_idle() 
+
+    except Exception as e:
+        print(f"Erreur lors de l'automatisation : {e}")
 
 async def discover_by_uuid():
     if not wifi_collect:
@@ -331,6 +371,9 @@ async def run_ble():
 def on_disconnect(client):
     print("Déconnecté de la carte")
 
+
+# - - - INTERACTIONS AVEC L'IHM - - -
+
 def change_range(label):
     global RANGE, block_ble_writes
     
@@ -443,7 +486,7 @@ def change_source_freq(label):
         )
 
 def toggle_recording(event):
-    global btnRecord, btnStream, is_recording, is_streaming, MODE
+    global btnRecord, btnStream, is_recording, is_streaming
 
     if not is_recording:
         is_recording = True
@@ -491,7 +534,7 @@ def toggle_recording(event):
     fig.canvas.draw_idle() 
 
 def toggle_stream(event):
-    global btnStream, btnRecord, is_streaming, is_recording, MODE
+    global btnStream, btnRecord, is_streaming, is_recording
 
     if not is_streaming:
         is_streaming = True
@@ -555,22 +598,8 @@ def toggle_source(event):
 
             asyncio.run_coroutine_threadsafe(source_sync(), ble_loop)
 
-    # else:
-    #     generating_impulsions = False
-    
-    #     raxSourcefreq.set_facecolor("#1934e278")
+        fig.canvas.draw_idle() 
 
-    #     btnSource.label.set_text("Activer la source")
-    #     btnSource.color = "#26ff00"
-    #     btnSource.hovercolor = "#12d900"
-
-    #     if client_Source and not block_ble_writes:
-    #         asyncio.run_coroutine_threadsafe(
-    #             client_Source.write_gatt_char(UUID_SOURCE_MODE, bytearray([0]), response=False), 
-    #             ble_loop
-    #         )
-
-    fig.canvas.draw_idle() 
 
 def toggle_connect_src(label):
     global connect_source
@@ -785,9 +814,9 @@ def update_plot(frame):
                     generating_impulsions = True
                     raxSourcefreq.set_facecolor("#9d9d9d")
 
-                    btnSource.label.set_text("Désactiver la source")
-                    btnSource.color = "#e22200"
-                    btnSource.hovercolor = "#d22200"
+                    btnSource.label.set_text("Source active...")
+                    btnSource.color = "#9d9d9d"
+                    btnSource.hovercolor = "#9d9d9d"
                 
                 else:
                     generating_impulsions = False
@@ -798,6 +827,7 @@ def update_plot(frame):
                     btnSource.color = "#26ff00"
                     btnSource.hovercolor = "#12d900"
 
+            print("Synchronisation avec l'IHM réussie !")
             fig.canvas.draw_idle()
 
         except Exception as e:

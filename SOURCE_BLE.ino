@@ -21,7 +21,7 @@
 // GPS
 #define PPS_PIN           2
 
-#define MAX_NB_IMPULSE    10
+#define MAX_NB_IMPULSE    3
 
 // Constantes et variables globales
 const int tabHz[13] = {10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 150, 200, 250};
@@ -138,11 +138,10 @@ void RICKER_Task(void* pv) {
 
       else{
         currentMode = OFF;
-        
         pinMode(SOURCE_PIN, OUTPUT);
         digitalWrite(SOURCE_PIN, LOW);
 
-        pModeChar->setValue((uint8_t*) &currentMode, (size_t) sizeof(currentMode));
+        if(impulsesToLog == 0)  pModeChar->setValue((uint8_t*) &currentMode, (size_t) sizeof(currentMode));
       }
 
       taskYIELD();
@@ -232,7 +231,6 @@ void setup() {
   
   ledcSetup(0, 40000, SOURCE_RES); 
   ledcWrite(0, TABLE_SIZE/2 - 1);
-  // ledcAttachPin(SOURCE_PIN, 0);
 
   pinMode(SOURCE_PIN, OUTPUT);
   digitalWrite(SOURCE_PIN, LOW);
@@ -242,12 +240,6 @@ void setup() {
   // Configuration de PPS_PIN
   pinMode(PPS_PIN, INPUT_PULLDOWN);
   attachInterrupt(digitalPinToInterrupt(PPS_PIN), PPS_handler, RISING);
-
-  // if (!file.open("init.bin", O_RDWR | O_CREAT | O_AT_END)) {
-  //   Serial.println("Echec critique : impossible de créer le fichier binaire.");
-  // }
-  // file.remove();
-  // file.close();
 
   delay(1000);
 
@@ -264,6 +256,8 @@ void loop() {
     if (impulsesToLog > 0) {
       impulsesToLog--;
       sampleID++;
+
+      if(currentMode == OFF && impulsesToLog == 0)  pModeChar->setValue((uint8_t*) &currentMode, (size_t) sizeof(currentMode));
 
       unsigned long startAttempt = millis();
       bool gpsFound = false;
@@ -294,7 +288,8 @@ void loop() {
       }
       else {
         if(!fileAlreadyExists){
-          file.println("Sample, Latitude, Longitude, Time (UTC)");             
+          file.println("Sample, Latitude, Longitude, Time (UTC)");  
+          sampleID = 1;           
         }
 
         file.print(sampleID); file.print(", ");
