@@ -58,6 +58,8 @@ latest_roll = 0.0
 
 name_arduinode = ""
 count_sync = 0
+old_count_sync = 0
+status_code = 0
 client_Arduinode = None
 client_Source = None
 ble_loop = None
@@ -69,7 +71,7 @@ reconnect_delay = 5
 
 async def synchronisation_handler(sender, value):
     """Permet un recensement des arduinodes actives ainsi qu'une confirmation de la synchronisation de ces dernières."""
-    global count_sync
+    global count_sync, status_code, old_count_sync
 
     sender_uuid = sender.uuid.lower()
 
@@ -78,6 +80,7 @@ async def synchronisation_handler(sender, value):
             status_code = value[0] 
             
             if status_code == 0xFF:
+                old_count_sync = count_sync
                 count_sync += 1
                 print(f"[Synchronisation {count_sync}]      Arduinodes synchronisées !")
                 
@@ -154,14 +157,26 @@ async def source_sync():
         btnSource.color = "#26ff00"
         btnSource.hovercolor = "#12d900"
         fig.canvas.draw_idle() 
-        
-        
+           
 async def source_automation_sequence():
     global is_recording, generating_impulsions
-    try:
-        await asyncio.sleep(1)
 
-        print("\n[Auto] Déclenchement de la source...")
+    timeout = 10.0 
+    start_time = time.time()
+
+    try:
+        
+        # Attente que tous les noeuds se synchronisent
+        while client_Arduinode:
+            await asyncio.sleep(0.1)
+
+            if time.time() - start_time > timeout:
+                break
+
+            if status_code == 0xFF and count_sync > old_count_sync or count_sync == 0:
+                break
+
+        print("\n[Acquisition] Déclenchement de la source...")
         await client_Source.write_gatt_char(UUID_SOURCE_MODE, bytearray([1]), response=False)
         generating_impulsions = True
         raxSourcefreq.set_facecolor("#9d9d9d")
@@ -171,15 +186,17 @@ async def source_automation_sequence():
         btnSource.hovercolor = "#9d9d9d"
         fig.canvas.draw_idle() 
 
+        print("[Acquisition] Capture en cours...\n")
         await asyncio.sleep(1)
         
-        print("[Auto] Fin de la capture. Retour au mode SBY pour les Arduinodes.\n")
         await client_Arduinode.write_gatt_char(UUID_MODE, bytearray([0]), response=False)
-
-        timeout = 10.0  
+        print("[Acquisition] Fin de la capture.\n")
+ 
         start_time = time.time()
 
         try:
+
+            # Attente que la source se désactive
             while generating_impulsions and client_Source and client_Source.is_connected:
                 await asyncio.sleep(0.1)
 
@@ -206,15 +223,17 @@ async def source_automation_sequence():
             btnRecord.label.set_text("Lancer acquisition")
             btnRecord.color = "#ffb300"
             btnRecord.hovercolor = "#df9e05"
-            
+
             fig.canvas.draw_idle() 
 
     except Exception as e:
         print(f"Erreur lors de l'automatisation : {e}")
 
+# - - - FONCTIONS DE DEMARRAGE - - - 
+
 async def discover_by_uuid():
     if not wifi_collect:
-        print("\nRecherche automatique des cartes...")
+        print("Recherche automatique des cartes...")
     
     devices_dict = await BleakScanner.discover(timeout=5.0, return_adv=True)
     
@@ -253,7 +272,11 @@ async def run_ble():
     global ble_initial_state, needs_ui_sync, name_arduinode, count_sync
 
     while ble_running:
-        
+
+        if wifi_collect:
+            await asyncio.sleep(5)
+            continue
+
         MAC_ARDUINODE, MAC_SOURCE = await discover_by_uuid()
         
         if client_Arduinode is None:
@@ -281,7 +304,7 @@ async def run_ble():
                 
             client_2 = None
 
-        print("Tentative de connexion aux cartes trouvées...")
+        print("Tentative de connexion aux cartes trouvées...\n")
         
         try:
             wifi_collect = False
@@ -330,6 +353,19 @@ async def run_ble():
 
             try:
                 await client_1.write_gatt_char(UUID_SYNC, bytearray([1]), response=False)
+                
+                timeout = 5.0
+                start_time = time.time()
+
+                while client_1.is_connected:
+
+                    if time.time() - start_time > timeout:
+                        print(f"[Recensement]       1 arduinode détectée sur le terrain.")
+                        break
+
+                    if count_sync > 0:
+                        break
+                    
             except Exception as sync_error:
                 print("Erreur lors de l'envoi du recensement automatique :", sync_error)
 
@@ -359,8 +395,7 @@ async def run_ble():
             client_Source = None
 
         if wifi_collect:
-            print("Recherche WiFi des arduinodes activées. Cela peut prendre plusieurs secondes...")
-            await asyncio.sleep(30)
+            print("[WiFi]   Recherche des arduinodes activées. Cela peut prendre plusieurs secondes...\n")
 
         elif ble_running :
             print(f"Un des appareils n'est pas connecté. Nouvelle tentative dans {reconnect_delay} secondes...")
@@ -369,7 +404,7 @@ async def run_ble():
     print("Arrêt complet du BLE.")
 
 def on_disconnect(client):
-    print("Déconnecté de la carte")
+    print("Déconnecté de la carte.")
 
 
 # - - - INTERACTIONS AVEC L'IHM - - -
@@ -600,7 +635,6 @@ def toggle_source(event):
 
         fig.canvas.draw_idle() 
 
-
 def toggle_connect_src(label):
     global connect_source
 
@@ -627,20 +661,46 @@ def toggle_broadcast(label):
 def launch_extraction(event):
     process_batch(SAVE_MODE)
 
-def launch_wifi_collect(event):
-
+def on_collect_finished(success):
+    """Fonction appelée automatiquement dès que le thread de collecte Wi-Fi se termine."""
     global wifi_collect
+    wifi_collect = False
+    
+    if success:
+        print("\n[WiFi] Collecte globale terminée ! Reprise du BLE...\n")
+
+
+def launch_wifi_collect(event):
+    global wifi_collect, is_recording, is_streaming
 
     if client_Arduinode and not block_ble_writes:
+        wifi_collect = True
+
         asyncio.run_coroutine_threadsafe(
             client_Arduinode.write_gatt_char(UUID_MODE, bytearray([3]), response=False), 
             ble_loop
         )
-        wifi_collect = True
 
-        time.sleep(1)
+        if is_recording:
+            is_recording = False
+    
+            raxRange.set_facecolor("#1934e278")
+            raxFrequency.set_facecolor("#1934e278")
 
-        start_collect()
+            btnRecord.label.set_text("Lancer acquisition")
+            btnRecord.color = "#ffb300"
+            btnRecord.hovercolor = "#df9e05"
+
+        if is_streaming:
+            is_streaming = False
+
+            btnStream.label.set_text("Lancer stream")
+            btnStream.color = "#00aeff"
+            btnStream.hovercolor = "#0299de"
+
+        fig.canvas.draw_idle()
+        
+        start_collect(save_mode=SAVE_MODE, on_complete=on_collect_finished)
 
 def roll_call(event):
 
@@ -649,6 +709,19 @@ def roll_call(event):
             client_Arduinode.write_gatt_char(UUID_SYNC, bytearray([1]), response=False), 
             ble_loop
         )
+
+        timeout = 5.0
+        start_time = time.time()
+
+        print("Recensement en cours ...")
+        while client_Arduinode.is_connected:
+
+            if time.time() - start_time > timeout:
+                print("[Recensement]       1 arduinode détectée sur le terrain.")
+                break
+
+            if count_sync > 0:
+                break
 
 def on_limits_changed(ax):
     global axes_changed

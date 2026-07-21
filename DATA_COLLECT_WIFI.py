@@ -99,9 +99,11 @@ def connect_to_wifi(ssid_cible):
 def scan_arduinode_wifis():
     """ Balaye les réseaux Wi-Fi environnants et extrait tous les SSIDs qui correspondent au format 'Arduinode_X_WIFI'."""
     arduinode_list = []
+    start_time = time.time()
+
     try:   
 
-        while arduinode_list == []:
+        while not arduinode_list:
             result = subprocess.run(
                 "netsh wlan show networks", 
                 shell=True, 
@@ -110,16 +112,14 @@ def scan_arduinode_wifis():
                 encoding="cp1252"
             )
             
-            if result.returncode != 0:
-                print("\nL'outil Windows (netsh) a rencontré un problème :")
-                erreur_windows = result.stderr.strip() if result.stderr else result.stdout.strip()
-                print(f"-> {erreur_windows}")
-                print("Pensez à vérifier que l'accès à la localisation est autorisé dans les réglages.\n")
-                return []
+            if result.returncode == 0:
+                pattern = r"Arduinode_\d+_WIFI"
+                matches = re.findall(pattern, result.stdout, re.IGNORECASE)
+                arduinode_list = list(set(matches))
 
-            pattern = r"Arduinode_\d+_WIFI"
-            matches = re.findall(pattern, result.stdout, re.IGNORECASE)
-            arduinode_list = list(set(matches))
+            if not arduinode_list:
+                time.sleep(1)
+                print(".")
         
     except Exception as e:
         print(f"Erreur scan Wi-Fi : {e}")
@@ -142,7 +142,12 @@ def collect_data_wifi(save_mode="CSV + BIN"):
     print(f"{len(available_arduinodes)} carte(s) détectée(s). Début de la collecte...")
     
     for ssid in available_arduinodes:
-        connected_to_node = configure_wifi(ssid, PWD_ARDUINODE)
+
+        if connect_to_wifi(ssid):
+            connected_to_node = True
+        
+        else:
+            connected_to_node = configure_wifi(ssid, PWD_ARDUINODE)
         
         if not connected_to_node:
             print(f"Erreur : impossible de basculer sur le WiFi de {ssid}. Passage à la suivante.")
@@ -153,11 +158,18 @@ def collect_data_wifi(save_mode="CSV + BIN"):
             # Récupération de la liste des fichiers
             response = requests.get(f"{url_root}/list", timeout=5)
             if response.status_code != 200 or not response.text.strip():
-                print("Aucun fichier binaire à récupérer (Carte SD vide).")
-                return
-
+                print(f"[{ssid}]    Aucun fichier binaire à récupérer (Carte SD vide).")
+                
+                try:
+                    requests.get(f"{url_root}/reboot", timeout=2)
+                except requests.RequestException:
+                    pass
+                
+                time.sleep(2)
+                continue 
+            
             files = response.text.strip().split("\n")
-            print(f"[{ssid}] {len(files)} fichier(s) détecté(s) sur l'Arduinode.")
+            print(f"[{ssid}]    {len(files)} fichier(s) détecté(s) sur l'Arduinode.")
 
             temp_folder = "./DUMP_WIFI"
             csv_folder = f"./DATACSV/{files[0][:11]}"
@@ -223,7 +235,18 @@ def collect_data_wifi(save_mode="CSV + BIN"):
     if connected_to_node:
         subprocess.run("netsh wlan disconnect", shell=True, stdout=subprocess.DEVNULL)
 
-def start_collect(save_mode="CSV + BIN"):
+    return True
+
+def start_collect(save_mode="CSV + BIN", on_complete=None):
     """Déclenche la récupération dans un thread pour préserver l'IHM."""
-    t = threading.Thread(target= collect_data_wifi, args=(save_mode,), daemon=True)
+    
+    def wrapper():
+        success = collect_data_wifi(save_mode)
+        
+        if on_complete:
+            on_complete(success)
+            
+        return success
+    
+    t = threading.Thread(target=wrapper, daemon=True)
     t.start()
