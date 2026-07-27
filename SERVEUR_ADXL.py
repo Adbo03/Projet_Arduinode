@@ -78,14 +78,10 @@ async def synchronisation_handler(sender, value):
     if sender_uuid == UUID_SYNC:
         if len(value) > 0:
             status_code = value[0] 
-            
+
             if status_code == 0xFF:
                 old_count_sync = count_sync
                 count_sync += 1
-                print(f"[Synchronisation {count_sync}]      Arduinodes synchronisées !")
-                
-            else:
-                print(f"[Recensement]       {status_code} arduinodes détectées sur le terrain.")
 
 def notification_handler(sender, data):
     """Décode les nouvelles données reçues et les stocke dans les buffers"""
@@ -122,6 +118,23 @@ def notification_handler(sender, data):
         except ValueError:
             # Sécurité en cas de division par zéro instable
             pass
+
+
+async def wait_for_roll_call_result(timeout=10.0, interval=0.1):
+    global status_code
+
+    start_time = time.time()
+
+    while True:
+        await asyncio.sleep(interval)
+
+        if status_code > 0 and status_code != 0xFF:
+            received_status = status_code
+            status_code = 0
+            return received_status
+
+        if time.time() - start_time > timeout:
+            return None
 
 
 # - - - SEQUENCES SPECIALES - - - 
@@ -269,7 +282,7 @@ async def toggle_radio(type_radio, status=True):
 
 async def run_ble():
     global client_Arduinode, client_Source, ble_running, btnRecord, wifi_collect
-    global ble_initial_state, needs_ui_sync, name_arduinode, count_sync
+    global ble_initial_state, needs_ui_sync, name_arduinode, status_code
 
     while ble_running:
 
@@ -352,20 +365,18 @@ async def run_ble():
             await client_1.start_notify(UUID_SYNC, synchronisation_handler)
 
             try:
+                status_code = 0
                 await client_1.write_gatt_char(UUID_SYNC, bytearray([1]), response=False)
-                
-                timeout = 5.0
-                start_time = time.time()
 
-                while client_1.is_connected:
+                print("Recensement en cours ...")
+                result = await wait_for_roll_call_result(timeout=30.0)
 
-                    if time.time() - start_time > timeout:
-                        print(f"[Recensement]       1 arduinode détectée sur le terrain.")
-                        break
+                if result is None:
+                    print("[Recensement]       1 arduinode détectée sur le terrain.")
 
-                    if count_sync > 0:
-                        break
-                    
+                else:
+                    print(f"[Recensement]       {result} arduinodes détectées sur le terrain.")
+
             except Exception as sync_error:
                 print("Erreur lors de l'envoi du recensement automatique :", sync_error)
 
@@ -703,25 +714,34 @@ def launch_wifi_collect(event):
         start_collect(save_mode=SAVE_MODE, on_complete=on_collect_finished)
 
 def roll_call(event):
+    global status_code
 
     if client_Arduinode:
+        status_code = 0
+
         asyncio.run_coroutine_threadsafe(
             client_Arduinode.write_gatt_char(UUID_SYNC, bytearray([1]), response=False), 
             ble_loop
         )
 
-        timeout = 5.0
+        timeout = 10.0
         start_time = time.time()
 
         print("Recensement en cours ...")
         while client_Arduinode.is_connected:
+            if status_code > 0 and status_code != 0xFF:
+                received_status = status_code
+                status_code = 0
+
+                print(f"[Recensement]       {received_status} arduinodes détectées sur le terrain.")
+                break
 
             if time.time() - start_time > timeout:
                 print("[Recensement]       1 arduinode détectée sur le terrain.")
                 break
 
-            if count_sync > 0:
-                break
+            time.sleep(0.1)
+
 
 def on_limits_changed(ax):
     global axes_changed
