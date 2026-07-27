@@ -52,7 +52,6 @@
 #define REPLY_PONG    2  
 #define REPLY_ACK     3  
 
-
 // Bus SPI dédié pour communiquer avec le lecteur SD
 SPIClass sdSPI(HSPI);
 
@@ -162,7 +161,9 @@ void configureArduinodeID() {
   Serial.println(nodeName);
 }
 
+
 /* - - - Fonctions pour gérer la retransmission aux autres arduinodes - - - */
+
 String macToString(const uint8_t* mac) {
   char buf[20];
   snprintf(buf, sizeof(buf), "%02X:%02X:%02X:%02X:%02X:%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
@@ -740,16 +741,6 @@ void loop() {
     esp_now_send(broadcastAddress, (uint8_t *) &pendingConfig, sizeof(pendingConfig));
   }
 
-  /* - - - Recupération des données GPS - - - */
-  while (Serial1.available() > 0) {
-
-    if (gps.encode(Serial1.read())) {
-      if (gps.location.isValid()) {
-        lastLat = gps.location.lat();
-        lastLon = gps.location.lng();
-      }
-    }
-  }
 
   /* - - - Mise à jour des modes et paramètres - - - */
   
@@ -775,6 +766,24 @@ void loop() {
       Serial.println("Début du stockage des données...");
 
       if (!file.isOpen()) {
+
+        unsigned long startAttempt = millis();
+        bool gpsFound = false;
+
+        // Récupération des données GPS
+        while (millis() - startAttempt < 5000) {
+          while (Serial1.available() > 0) {
+            if (gps.encode(Serial1.read())) {
+              if (gps.location.isValid() && gps.time.isValid()) {
+                lastLat = gps.location.lat();
+                lastLon = gps.location.lng();
+                gpsFound = true;
+                break;
+              }
+            }
+          }
+          if (gpsFound) break;
+        }
 
         snprintf(hours, sizeof(hours), "%02d", gps.time.hour());
         snprintf(minutes, sizeof(minutes), "%02d", gps.time.minute());
@@ -969,6 +978,13 @@ void loop() {
     delay(500); 
     NimBLEDevice::startAdvertising();
     wasConnected = false;
+
+    // Arrêt des envois BLE
+    if(currentMode == LIVE){
+      currentMode = SBY;
+      pModeChar->setValue((uint8_t*) &currentMode, (size_t) sizeof(currentMode));
+    }
+
   }
 
   if (deviceConnected && !wasConnected) {
