@@ -1,11 +1,25 @@
 # Projet Arduinode
-Développement d'un noeud sismique 3 composantes
-
-Arduinode : ADXL355Z, NANO ESP32, lecteur carte SD (JOY-IT), Ultimate GPS Breakout v3 (adafruit)
-
-Source : ASX11504-SW-R (PUI Audio), NANO ESP32, amplificateur de puissance
+Développement d'un noeud sismique 3 composantes  
 
 IDE utilisé : Arduino IDE v2.3.8
+
+    Matériel Arduinode :
+
+|   Composants  |   Liens|
+|---------------|   -------------------|
+|   ADXL355Z    |   https://www.mouser.fr/en/ProductDetail/Analog-Devices/EVAL-ADXL355Z?qs=vcbl%252bK4rRld3rqhNJZ6Vfg%3D%3D |
+|   Nano ESP32  |   https://fr.rs-online.com/web/p/arduino/2686963?cm_mmc=FR-PLA-DS3A-_-bing-_-PLA_FR_FR_Catch+All-_-Composants+Electroniques,+Energie+et+Connecteurs-_-2686963&matchtype=e&pla-4574655592306590&cq_src=google_ads&cq_cmp=554644914&cq_term=&cq_plac=&cq_net=o&cq_plt=gp&gclid=226f0e073acf16a2be86646c2ed045e5&gclsrc=3p.ds&msclkid=226f0e073acf16a2be86646c2ed045e5   |
+|   Lecteur micro-SD    |   https://www.conrad.fr/fr/p/joy-it-com-msd-module-d-extension-1-pc-s-2582441.html    |
+|   Module GPS  |   https://fr.rs-online.com/web/p/modules-gnss-et-gps/9054630?gb=a |  
+
+    Matériel Source :  
+
+
+|   Composants  |   Liens   |
+|---------------|-----------|
+|   Excitateur audio    |   https://fr.farnell.com/pui-audio/asx11504-sw-r/haut-parleur-5hz-500hz-4-ohms/dp/4412339?CMP=KNC-MFR-GEN-SKU&msclkid=c861b36a99dd125564aad90182343cf4    |
+|   Nano ESP32  |   https://fr.rs-online.com/web/p/arduino/2686963?cm_mmc=FR-PLA-DS3A-_-bing-_-PLA_FR_FR_Catch+All-_-Composants+Electroniques,+Energie+et+Connecteurs-_-2686963&matchtype=e&pla-4574655592306590&cq_src=google_ads&cq_cmp=554644914&cq_term=&cq_plac=&cq_net=o&cq_plt=gp&gclid=226f0e073acf16a2be86646c2ed045e5&gclsrc=3p.ds&msclkid=226f0e073acf16a2be86646c2ed045e5   |
+|   Amplificateur de puissance  |   https://www.conrad.fr/fr/p/whadda-wsah8060-amplificateur-2482039.html   |  
 
 A NOTER : Des resistances et des capacités ont aussi été utilisés pour des opérations intermédiaires diverses. 
 
