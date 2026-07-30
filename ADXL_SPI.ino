@@ -99,6 +99,7 @@ SdFat sd;
 SdFile file;
 TinyGPSPlus gps;
 hw_timer_t * timerSample = NULL;
+
 WebServer server(80);
 
 const int tabHz[11] = {4000, 2000, 1000, 500, 250, 125, 62.5, 31.25, 15.625, 7.813, 3.906};
@@ -142,23 +143,23 @@ int32_t z_raw = 0;
 
 SemaphoreHandle_t timerSampleFlag;
 
-uint8_t arduinodeID = 0;
+uint64_t arduinodeID = 0;
 String nodeName = "Arduinode_0";
 
 void configureArduinodeID() {
-  uint8_t mac[6];
-  WiFi.macAddress(mac);
+  uint64_t chipID = ESP.getEfuseMac(); 
+  Serial.printf("ID: %04X%08X\n", (uint16_t)(chipID >> 32), (uint32_t)chipID);      
   
-  // Utilisation de l'adresse MAC pour générer des identifiant uniques
-  if (mac[5] == 0x48) { arduinodeID = 0; }
-  else if (mac[5] == 0x98) { arduinodeID = 1; }
-  else if (mac[5] == 0xBF) { arduinodeID = 2; }
+  // Utilisation de l'adresse MAC pour générer des identifiants uniques
+  if (chipID == 0x4886AE63B0E4) { arduinodeID = 0; }
+  else if (chipID == 0x98302E43CA48) { arduinodeID = 1; }
+  else if (chipID == 0xBF) { arduinodeID = 2; }
   else { 
-    arduinodeID = mac[5]; 
+    arduinodeID = chipID; 
   }
   
   nodeName = "Arduinode_" + String(arduinodeID);
-  Serial.println(nodeName);
+  Serial.print("Module : "); Serial.println(nodeName);
 }
 
 
@@ -974,7 +975,7 @@ void loop() {
   }
 
   /* - - - Gestion automatique de la reconnexion - - - */
-  if (!deviceConnected && wasConnected) {
+  if (!deviceConnected && wasConnected && currentMode != WIFI_COLLECT) {
     delay(500); 
     NimBLEDevice::startAdvertising();
     wasConnected = false;
