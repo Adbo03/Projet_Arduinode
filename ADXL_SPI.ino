@@ -112,7 +112,7 @@ volatile int32_t TICK_SAMPLE_US = 1000000/tabHz[currentFreq];
 
 volatile uint32_t pps_micros = 0;
 float lastLat = 0, lastLon = 0;
-char hours[3], minutes[3], seconds[3], title[43], interval[3], day[3], month[3], year[5];
+char hours[3], minutes[3], seconds[3], interval[3], day[3], month[3], year[5];
 
 // Adresses des registres
 const int REG_XDATA3 = 0x08;
@@ -798,7 +798,9 @@ void loop() {
         else if(currentRange == _4g) sprintf(interval, "4g");
         else if(currentRange == _8g) sprintf(interval, "8g");
 
-        snprintf(title, sizeof(title), "%s_%s_%s_%s_UTC_%s_%s_%s_%s.bin", nodeName, hours, minutes, seconds, interval, day, month, year);
+        char title[sizeof(nodeName) + sizeof(hours) + sizeof(minutes) + sizeof(seconds) + sizeof(interval) + 12];
+
+        snprintf(title, sizeof(title), "%s_%s_%s_%s_UTC_%s.bin", nodeName, hours, minutes, seconds, interval);
 
         if (!file.open(title, O_RDWR | O_CREAT | O_AT_END)) {
           Serial.println("Echec critique : impossible de créer le fichier binaire.");
