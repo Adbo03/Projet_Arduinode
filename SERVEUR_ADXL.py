@@ -369,7 +369,7 @@ async def run_ble():
                 await client_1.write_gatt_char(UUID_SYNC, bytearray([1]), response=False)
 
                 print("Recensement en cours ...")
-                result = await wait_for_roll_call_result(timeout=30.0)
+                result = await wait_for_roll_call_result(timeout=5.0)
 
                 if result is None:
                     print("[Recensement]       1 arduinode détectée sur le terrain.")
@@ -672,13 +672,10 @@ def toggle_broadcast(label):
 def launch_extraction(event):
     process_batch(SAVE_MODE)
 
-def on_collect_finished(success):
+def on_collect_finished():
     """Fonction appelée automatiquement dès que le thread de collecte Wi-Fi se termine."""
     global wifi_collect
     wifi_collect = False
-    
-    if success:
-        print("\n[WiFi] Collecte globale terminée ! Reprise du BLE...\n")
 
 
 def launch_wifi_collect(event):
@@ -711,7 +708,7 @@ def launch_wifi_collect(event):
 
         fig.canvas.draw_idle()
         
-        start_collect(save_mode=SAVE_MODE, on_complete=on_collect_finished)
+        start_collect(save_mode=SAVE_MODE, source= connect_source, on_complete=on_collect_finished)
 
 def roll_call(event):
     global status_code
@@ -724,7 +721,7 @@ def roll_call(event):
             ble_loop
         )
 
-        timeout = 10.0
+        timeout = 5.0
         start_time = time.time()
 
         print("Recensement en cours ...")
@@ -977,7 +974,7 @@ if __name__ == "__main__":
     def on_close(event):
         global ble_running
         ble_running = False
-        print("Fermeture du programme...")
+        print("Fermeture de l'application...")
 
     fig.canvas.mpl_connect('close_event', on_close)
     
