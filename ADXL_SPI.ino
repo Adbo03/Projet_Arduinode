@@ -112,8 +112,7 @@ volatile int32_t TICK_SAMPLE_US = 1000000/tabHz[currentFreq];
 
 volatile uint32_t pps_micros = 0;
 float lastLat = 0, lastLon = 0;
-char hours[3], minutes[3], seconds[3], title[32];
-char interval[3];
+char hours[3], minutes[3], seconds[3], title[43], interval[3], day[3], month[3], year[5];
 
 // Adresses des registres
 const int REG_XDATA3 = 0x08;
@@ -153,7 +152,7 @@ void configureArduinodeID() {
   // Utilisation de l'adresse MAC pour générer des identifiants uniques
   if (chipID == 0x4886AE63B0E4) { arduinodeID = 0; }
   else if (chipID == 0x98302E43CA48) { arduinodeID = 1; }
-  else if (chipID == 0xBF) { arduinodeID = 2; }
+  else if (chipID == 0x2C3CA0BD4D74) { arduinodeID = 2; }
   else { 
     arduinodeID = chipID; 
   }
@@ -775,7 +774,7 @@ void loop() {
         while (millis() - startAttempt < 5000) {
           while (Serial1.available() > 0) {
             if (gps.encode(Serial1.read())) {
-              if (gps.location.isValid() && gps.time.isValid()) {
+              if (gps.location.isValid() && gps.time.isValid() && gps.date.isValid()) {
                 lastLat = gps.location.lat();
                 lastLon = gps.location.lng();
                 gpsFound = true;
@@ -786,15 +785,20 @@ void loop() {
           if (gpsFound) break;
         }
 
+        snprintf(day, sizeof(day), "%02d", gps.date.day());
+        snprintf(month, sizeof(month), "%02d", gps.date.month());
+        snprintf(year, sizeof(year), "%04d", gps.date.year());
+
         snprintf(hours, sizeof(hours), "%02d", gps.time.hour());
         snprintf(minutes, sizeof(minutes), "%02d", gps.time.minute());
         snprintf(seconds, sizeof(seconds),"%02d", gps.time.second());
+
 
         if(currentRange == _2g) sprintf(interval, "2g");
         else if(currentRange == _4g) sprintf(interval, "4g");
         else if(currentRange == _8g) sprintf(interval, "8g");
 
-        snprintf(title, sizeof(title), "%s_%s_%s_%s_UTC_%s.bin", nodeName, hours, minutes, seconds, interval);
+        snprintf(title, sizeof(title), "%s_%s_%s_%s_UTC_%s_%s_%s_%s.bin", nodeName, hours, minutes, seconds, interval, day, month, year);
 
         if (!file.open(title, O_RDWR | O_CREAT | O_AT_END)) {
           Serial.println("Echec critique : impossible de créer le fichier binaire.");
@@ -816,7 +820,14 @@ void loop() {
           file.print(",");
 
           file.print(interval);
+          file.print(",");
           
+          file.print(day);
+          file.print('/');
+          file.print(month);
+          file.print('/');
+          file.print(year);
+
           file.println(); 
         }
       }

@@ -4,6 +4,7 @@ import os
 import math
 import shutil
 import ctypes
+from datetime import datetime, timedelta
 
 SAMPLE_SIZE = 16
 
@@ -21,6 +22,15 @@ def get_removable_drives():
                 drives.append(drive_letter)
     return drives
 
+def get_next_day(date_str):
+    """ Renvoie la date du jour qui suit date_str"""
+
+    current_date = datetime.strptime(date_str, "%d/%m/%Y")
+    next_day = current_date + timedelta(days=1)
+
+    return next_day.strftime("%d/%m/%Y")
+
+    
 def process_file(bin_path, csv_path):
     """Effectue la conversion d'un fichier binaire unique en CSV."""
     file_size = os.path.getsize(bin_path)
@@ -33,15 +43,15 @@ def process_file(bin_path, csv_path):
 
     with open(bin_path, "rb") as bin_file, open(csv_path, "w", newline='') as csv_file:
         writer = csv.writer(csv_file)
-        writer.writerow(["Acc_X_g", "Acc_Y_g", "Acc_Z_g", "Roll", "Pitch", "Latitute", "Longitude", "Time (UTC)"])
+        writer.writerow(["Acc_X_g", "Acc_Y_g", "Acc_Z_g", "Roll", "Pitch", "Latitute", "Longitude", "Time (UTC)", "Date"])
 
         # Vérification du header GPS
         first_bytes = bin_file.peek(4)
         if first_bytes.startswith(b"GPS:"):
             gps_line = bin_file.readline().decode('utf-8').strip()
             parts = gps_line.replace("GPS:", "").split(",")
-            if len(parts) >= 4:
-                lat, lon, time_raw, range = parts[0], parts[1], parts[2], parts[3]
+            if len(parts) >= 5:
+                lat, lon, time_raw, range, date = parts[0], parts[1], parts[2], parts[3], parts[4]
                 try:
                     hours, minutes, seconds = time_raw.split(':')
                     real_hours = int(hours)
@@ -95,12 +105,13 @@ def process_file(bin_path, csv_path):
 
             if(real_hours > 23):
                 real_hours = 0
+                date = get_next_day(date)
 
             timestamp = f"{real_hours:02d}:{real_minutes:02d}:{real_seconds:02d}.{real_us:06d}"
             last_us = real_us
 
             # Écriture dans le CSV
-            writer.writerow([f"{ax:.3f}", f"{ay:.3f}", f"{az:.3f}", f"{roll:.2f}", f"{pitch:.2f}", lat, lon, timestamp])
+            writer.writerow([f"{ax:.3f}", f"{ay:.3f}", f"{az:.3f}", f"{roll:.2f}", f"{pitch:.2f}", lat, lon, timestamp, date])
             
             count += 1
             if count % 80000 == 0: # Progression toutes les 20 secondes de données à 4kHz
