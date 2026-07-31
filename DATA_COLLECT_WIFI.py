@@ -5,6 +5,8 @@ import threading
 import time 
 import subprocess
 import re
+import ctypes
+from ctypes import wintypes
 from CONVERSION_BIN_CSV import process_file 
 
 def configure_wifi(ssid, password):
@@ -96,14 +98,63 @@ def connect_to_wifi(ssid_cible):
         print(f"Erreur : {e}")
     return False
 
+def force_wifi_scan():
+    """ Force la carte Wi-Fi à lancer un scan actif des réseaux environnants via l'API WlanAPI. """
+    try:
+        wlanapi = ctypes.windll.wlanapi
+
+        class GUID(ctypes.Structure):
+            _fields_ = [
+                ("Data1", wintypes.DWORD),
+                ("Data2", wintypes.WORD),
+                ("Data3", wintypes.WORD),
+                ("Data4", ctypes.c_byte * 8)
+            ]
+
+        class WLAN_INTERFACE_INFO(ctypes.Structure):
+            _fields_ = [
+                ("InterfaceGuid", GUID),
+                ("strInterfaceDescription", ctypes.c_wchar * 256),
+                ("isState", ctypes.c_int)
+            ]
+
+        class WLAN_INTERFACE_INFO_LIST(ctypes.Structure):
+            _fields_ = [
+                ("NumberOfItems", wintypes.DWORD),
+                ("Index", wintypes.DWORD),
+                ("InterfaceInfo", WLAN_INTERFACE_INFO * 1)
+            ]
+
+        handle = wintypes.HANDLE()
+        negotiated_version = wintypes.DWORD()
+
+        # Ouverture de la session WLAN
+        if wlanapi.WlanOpenHandle(2, None, ctypes.byref(negotiated_version), ctypes.byref(handle)) == 0:
+            p_if_list = ctypes.POINTER(WLAN_INTERFACE_INFO_LIST)()
+            
+            # Récupération des cartes Wi-Fi disponibles
+            if wlanapi.WlanEnumInterfaces(handle, None, ctypes.byref(p_if_list)) == 0:
+                if p_if_list.contents.NumberOfItems > 0:
+                    # Envoi de l'ordre de scan à la première carte Wi-Fi
+                    if_guid = p_if_list.contents.InterfaceInfo[0].InterfaceGuid
+                    wlanapi.WlanScan(handle, ctypes.byref(if_guid), None, None, None)
+                
+                wlanapi.WlanFreeMemory(p_if_list)
+            
+            wlanapi.WlanCloseHandle(handle, None)
+    except Exception as e:
+        print(f"Avertissement : impossible de forcer le scan matériel ({e})")
+
 def scan_arduinode_wifis():
     """ Balaye les réseaux Wi-Fi environnants et extrait tous les SSIDs qui correspondent au format 'Arduinode_X_WIFI'."""
     arduinode_list = []
-    start_time = time.time()
 
     try:   
 
         while not arduinode_list:
+            force_wifi_scan()
+            time.sleep(2.5)
+
             result = subprocess.run(
                 "netsh wlan show networks", 
                 shell=True, 
@@ -118,18 +169,29 @@ def scan_arduinode_wifis():
                 arduinode_list = list(set(matches))
 
             if not arduinode_list:
+                print(".", end="", flush=True)
                 time.sleep(1)
-                print(".")
         
     except Exception as e:
         print(f"Erreur scan Wi-Fi : {e}")
         
     return arduinode_list
 
-def collect_data_wifi(save_mode="CSV + BIN"):
+def get_unique_filepath(folder, filename):
+    base, ext = os.path.splitext(filename)
+    counter = 1
+    target_path = os.path.join(folder, filename)
+    
+    while os.path.exists(target_path):
+        target_path = os.path.join(folder, f"{base}_{counter}{ext}")
+        counter += 1
+        
+    return target_path
+
+def collect_data_wifi(source, save_mode="CSV + BIN"):
     """ Télécharge tous les fichiers de l'ESP32 par Wi-Fi, les supprime de la SD, puis applique la conversion sélectionnée dans l'IHM."""
 
-    PWD_ARDUINODE = "password123"
+    PWD = "password123"
     IP_ESP = "192.168.4.1"
     url_root = f"http://{IP_ESP}"
 
@@ -139,15 +201,17 @@ def collect_data_wifi(save_mode="CSV + BIN"):
         print("Aucune carte Arduinode n'a été détecté (WIFI). Collecte annulée.")
         return 
     
-    print(f"{len(available_arduinodes)} carte(s) détectée(s). Début de la collecte...")
-    
+    print(f"\n{len(available_arduinodes)} carte(s) détectée(s). Début de la collecte...")
+
+    # # # Collecte des fichiers des arduinodes # # #
+
     for ssid in available_arduinodes:
 
         if connect_to_wifi(ssid):
             connected_to_node = True
         
         else:
-            connected_to_node = configure_wifi(ssid, PWD_ARDUINODE)
+            connected_to_node = configure_wifi(ssid, PWD)
         
         if not connected_to_node:
             print(f"Erreur : impossible de basculer sur le WiFi de {ssid}. Passage à la suivante.")
@@ -220,8 +284,8 @@ def collect_data_wifi(save_mode="CSV + BIN"):
                     print(f"Erreur critique lors du téléchargement de {file_name}. Le fichier est probablement vide -> Traitement annulé pour ce fichier.")
 
             print(f"\nFin des opérations pour {ssid}.")
+
             print(f"Demande de réinitialisation à {ssid} (réactivation du BLE)...")
-            
             try:
                 requests.get(f"{url_root}/reboot", timeout=2)
             except requests.RequestException:
@@ -235,16 +299,69 @@ def collect_data_wifi(save_mode="CSV + BIN"):
     if connected_to_node:
         subprocess.run("netsh wlan disconnect", shell=True, stdout=subprocess.DEVNULL)
 
+    # # # Collecte du fichier de la source (si activée) # # #
+    
+    if source:
+        source_ssid = "SOURCE_WIFI"
+        target_file = "Source.csv"
+
+        if connect_to_wifi(source_ssid):
+            connected_to_source = True
+        
+        else:
+            connected_to_source = configure_wifi(source_ssid, PWD)
+        
+        if not connected_to_source:
+            print(f"Erreur : impossible de basculer sur le WiFi de {source_ssid}.")
+            return True
+
+        try:
+            source_folder = "./SOURCE"
+            os.makedirs(source_folder, exist_ok=True)
+
+            path_source = get_unique_filepath(source_folder, target_file)
+            print(f"\n [{source_ssid}] Téléchargement de : {target_file}...")
+            
+            with requests.get(f"{url_root}/download", params={"name": target_file}, stream=True, timeout=5) as r:
+                if r.status_code == 404:
+                    print(f"[{source_ssid}] Aucun fichier '{target_file}' présent sur la carte SD.")
+                elif r.status_code == 200:    
+                    with open(path_source, 'wb') as f:
+                        for chunk in r.iter_content(chunk_size=8192):
+                            f.write(chunk)
+                
+                    if os.path.exists(path_source) and os.path.getsize(path_source) > 0:
+                        print(f"Fichier sauvegardé sous : {path_source}")
+                        del_resp = requests.get(f"{url_root}/delete", params={"name": target_file})
+                        if del_resp.status_code == 200:
+                            print(f"'{target_file}' supprimé avec succès de la SD.")
+                    else:
+                        print(f"Erreur critique : fichier téléchargé vide.")
+            
+            print(f"Demande de réinitialisation à {source_ssid} (réactivation du BLE)...")
+            try:
+                requests.get(f"{url_root}/reboot", timeout=2)
+            except requests.RequestException:
+                pass
+            
+            time.sleep(2)
+
+        except Exception as e:
+                    print(f"Erreur lors de la collecte sur {source_ssid} : {e}")
+
+        finally:
+            subprocess.run("netsh wlan disconnect", shell=True, stdout=subprocess.DEVNULL)
+
     return True
 
-def start_collect(save_mode="CSV + BIN", on_complete=None):
+def start_collect(source, save_mode="CSV + BIN", on_complete=None):
     """Déclenche la récupération dans un thread pour préserver l'IHM."""
     
     def wrapper():
-        success = collect_data_wifi(save_mode)
+        success = collect_data_wifi(source, save_mode)
         
         if on_complete:
-            on_complete(success)
+            on_complete()
             
         return success
     
