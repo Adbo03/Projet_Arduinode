@@ -66,12 +66,14 @@ ble_loop = None
 ble_running = True
 reconnect_delay = 5
 
+arduinodes_deployed = set()
+
 
 # - - - GESTIONNAIRES DES ABONNEMENTS - - - 
 
 async def synchronisation_handler(sender, value):
     """Permet un recensement des arduinodes actives ainsi qu'une confirmation de la synchronisation de ces dernières."""
-    global count_sync, status_code, old_count_sync
+    global count_sync, status_code, old_count_sync, arduinodes_deployed
 
     sender_uuid = sender.uuid.lower()
 
@@ -79,6 +81,8 @@ async def synchronisation_handler(sender, value):
         if len(value) == 5:
             node_id, battery = struct.unpack('<IB', value)
             print(f"[Recensement] Arduinode_{node_id} | Niveau de batterie : {battery}%")
+
+            arduinodes_deployed.add((node_id, battery))
 
         elif len(value) == 1:
             status_code = value[0] 
@@ -124,21 +128,10 @@ def notification_handler(sender, data):
             pass
 
 
-async def wait_for_roll_call_result(timeout=10.0, interval=0.1):
-    global status_code
+async def wait_for_roll_call_result(timeout=10.0):
 
-    start_time = time.time()
-
-    while True:
-        await asyncio.sleep(interval)
-
-        if status_code > 0 and status_code != 0xFF:
-            received_status = status_code
-            status_code = 0
-            return received_status
-
-        if time.time() - start_time > timeout:
-            return None
+    await asyncio.sleep(timeout)
+    return None
 
 
 # - - - SEQUENCES SPECIALES - - - 
@@ -369,17 +362,21 @@ async def run_ble():
             await client_1.start_notify(UUID_SYNC, synchronisation_handler)
 
             try:
-                status_code = 0
                 await client_1.write_gatt_char(UUID_SYNC, bytearray([1]), response=False)
 
-                print("\n- - - DEBUT RECENSEMENT - - -")
+                print("\n- - - DEBUT RECENSEMENT - - -\n")
                 result = await wait_for_roll_call_result(timeout=5.0)
 
                 if result is None:
-                    print("- - - FIN RECENSEMENT - - -\n")
 
-                else:
-                    print(f"[Recensement]       {result} arduinodes détectées sur le terrain.")
+                    print(f"\n[Total]     {len(arduinodes_deployed)} arduinode(s) déployée(s) sur le terrain.\n")
+
+                    for (id, battery) in arduinodes_deployed:
+                        
+                        if battery < 20:
+                            print(f"Arduinode_{id} a une batterie faible ! (Batterie : {battery} %)")
+
+                    print("\n- - - FIN RECENSEMENT - - -\n")
 
             except Exception as sync_error:
                 print("Erreur lors de l'envoi du recensement automatique :", sync_error)
@@ -718,33 +715,33 @@ def launch_wifi_collect(event):
         start_collect(save_mode=SAVE_MODE, source= connect_source, on_complete=on_collect_finished)
 
 def roll_call(event):
-    global status_code
+    global arduinodes_deployed
 
     if client_Arduinode:
-        status_code = 0
-
+        arduinodes_deployed.clear()
+        
         asyncio.run_coroutine_threadsafe(
             client_Arduinode.write_gatt_char(UUID_SYNC, bytearray([1]), response=False), 
             ble_loop
         )
 
-        timeout = 5.0
-        start_time = time.time()
+        print("\n- - - DEBUT RECENSEMENT - - -\n")
 
-        print("\n- - - DEBUT RECENSEMENT - - -")
-        while client_Arduinode.is_connected:
-            if status_code > 0 and status_code != 0xFF:
-                received_status = status_code
-                status_code = 0
+        start = time.time()
+        timeout = 5
 
-                print(f"[Recensement]       {received_status} arduinodes détectées sur le terrain.")
+        while 1:
+            if time.time() - start > timeout:
                 break
+        
+        print(f"\n[Total]     {len(arduinodes_deployed)} arduinode(s) déployée(s) sur le terrain.\n")
 
-            if time.time() - start_time > timeout:
-                print("- - - FIN RECENSEMENT - - -\n")
-                break
+        for (id, battery) in arduinodes_deployed:
+            
+            if battery < 20:
+                print(f"Arduinode_{id} a une batterie faible ! (Batterie : {battery} %)\n")
 
-            time.sleep(0.1)
+        print("\n- - - FIN RECENSEMENT - - -\n")
 
 
 def on_limits_changed(ax):
