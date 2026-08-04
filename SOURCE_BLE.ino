@@ -39,7 +39,7 @@ TinyGPSPlus gps;
 volatile uint32_t pps_micros = 0;
 int sampleID = 0;
 float lastLat = 0, lastLon = 0;
-char hours[3], minutes[3], seconds[3], micros_s[7];
+char hours[3], minutes[3], seconds[3], micros_s[7], day[3], month[3], year[5];
 
 // Objets et pointeurs BLE 
 NimBLEServer* pServer = NULL;
@@ -265,7 +265,7 @@ void loop() {
       while (millis() - startAttempt < 2000) {
         while (Serial1.available() > 0) {
           if (gps.encode(Serial1.read())) {
-            if (gps.location.isValid() && gps.time.isValid()) {
+            if (gps.location.isValid() && gps.time.isValid() && gps.date.isValid()) {
               lastLat = gps.location.lat();
               lastLon = gps.location.lng();
               gpsFound = true;
@@ -275,6 +275,10 @@ void loop() {
         }
         if (gpsFound) break;
       }
+
+      snprintf(day, sizeof(day), "%02d", gps.date.day());
+      snprintf(month, sizeof(month), "%02d", gps.date.month());
+      snprintf(year, sizeof(year), "%04d", gps.date.year());
 
       snprintf(hours, sizeof(hours), "%02d", gps.time.hour());
       snprintf(minutes, sizeof(minutes), "%02d", gps.time.minute());
@@ -292,15 +296,30 @@ void loop() {
           sampleID = 1;           
         }
 
-        file.print(sampleID); file.print(", ");
-        file.print(lastLat, 6); file.print(",");
-        file.print(lastLon, 6); file.print(",");
-        file.print(hours); file.print(':');
-        file.print(minutes); file.print(':');
-        file.print(seconds); file.print('.');
+        file.print(sampleID); 
+        file.print(", ");
+        
+        file.print(lastLat, 6); 
+        file.print(",");
+        file.print(lastLon, 6); 
+        file.print(",");
+        
+        file.print(hours); 
+        file.print(':');
+        file.print(minutes); 
+        file.print(':');
+        file.print(seconds); 
+        file.print('.');
         file.print(micros_s);
-        file.println();
+        file.print(",");
 
+        file.print(day);
+        file.print('/');
+        file.print(month);
+        file.print('/');
+        file.print(year);
+
+        file.println();
         file.close(); 
       }
     }
