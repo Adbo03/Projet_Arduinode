@@ -292,7 +292,7 @@ void loop() {
       }
       else {
         if(!fileAlreadyExists){
-          file.println("Sample, Latitude, Longitude, Time (UTC)");  
+          file.println("Sample, Latitude, Longitude, Time (UTC), Date");  
           sampleID = 1;           
         }
 
