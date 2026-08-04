@@ -76,7 +76,11 @@ async def synchronisation_handler(sender, value):
     sender_uuid = sender.uuid.lower()
 
     if sender_uuid == UUID_SYNC:
-        if len(value) > 0:
+        if len(value) == 5:
+            node_id, battery = struct.unpack('<IB', value)
+            print(f"[Recensement] Arduinode_{node_id} | Niveau de batterie : {battery}%")
+
+        elif len(value) == 1:
             status_code = value[0] 
 
             if status_code == 0xFF:
@@ -368,11 +372,11 @@ async def run_ble():
                 status_code = 0
                 await client_1.write_gatt_char(UUID_SYNC, bytearray([1]), response=False)
 
-                print("Recensement en cours ...")
+                print("\n- - - DEBUT RECENSEMENT - - -")
                 result = await wait_for_roll_call_result(timeout=5.0)
 
                 if result is None:
-                    print("[Recensement]       1 arduinode détectée sur le terrain.")
+                    print("- - - FIN RECENSEMENT - - -\n")
 
                 else:
                     print(f"[Recensement]       {result} arduinodes détectées sur le terrain.")
@@ -401,6 +405,9 @@ async def run_ble():
         
         if client_1 and not client_1.is_connected:
             client_Arduinode = None
+            fig.suptitle("", fontsize=16, fontweight='bold')
+            fig.canvas.draw_idle() 
+
 
         if client_2 and not client_2.is_connected:
             client_Source = None
@@ -724,7 +731,7 @@ def roll_call(event):
         timeout = 5.0
         start_time = time.time()
 
-        print("Recensement en cours ...")
+        print("\n- - - DEBUT RECENSEMENT - - -")
         while client_Arduinode.is_connected:
             if status_code > 0 and status_code != 0xFF:
                 received_status = status_code
@@ -734,7 +741,7 @@ def roll_call(event):
                 break
 
             if time.time() - start_time > timeout:
-                print("[Recensement]       1 arduinode détectée sur le terrain.")
+                print("- - - FIN RECENSEMENT - - -\n")
                 break
 
             time.sleep(0.1)
@@ -754,7 +761,7 @@ raxBroadcast = plt.axes([0.02, 0.79, 0.15, 0.12], facecolor="#1934e278", title="
 radioBroadcast = RadioButtons(raxBroadcast, ('Désactiver', 'Activer'))
 radioBroadcast.on_clicked(toggle_broadcast)
 
-raxRange = plt.axes([0.02, 0.60, 0.15, 0.12], facecolor = "#1934e278", title="Plage de mesure")
+raxRange = plt.axes([0.02, 0.60, 0.15, 0.12], facecolor = "#1934e278", title="Sensibilité")
 radioRange = RadioButtons(raxRange, ('-2g/+2g', '-4g/+4g', '-8g/+8g'))
 radioRange.on_clicked(change_range)
 

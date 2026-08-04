@@ -10,17 +10,17 @@
 #include <esp_now.h>
 #include <set>
 
-#define ON   1
-#define OFF  0
+#define ON              1
+#define OFF             0
 
 // Paramétrage
-#define ADXL_CS   10
-#define SD_CS     9 
-#define SCK_SD    22
-#define MOSI_SD   23
-#define MISO_SD   21
+#define ADXL_CS         10
+#define SD_CS           9 
+#define SCK_SD          22
+#define MOSI_SD         23
+#define MISO_SD         21
 
-#define PPS_PIN 2
+#define PPS_PIN         2
 
 // Modes
 #define SBY             0
@@ -29,28 +29,32 @@
 #define WIFI_COLLECT    3
 
 // Plages de mesure
-#define _2g   0
-#define _4g   1
-#define _8g   2
+#define _2g             0
+#define _4g             1
+#define _8g             2
 
 // Frequences d'échantillonnage
-#define _4000Hz   0
-#define _2000Hz   1
-#define _1000Hz   2
-#define _500Hz    3
-#define _250Hz    4
-#define _125Hz    5
-#define _62_5Hz   6
-#define _31_25Hz  7
-#define _15_625Hz 8
-#define _7_813Hz  9
-#define _3_906Hz  10
+#define _4000Hz         0
+#define _2000Hz         1
+#define _1000Hz         2
+#define _500Hz          3
+#define _250Hz          4
+#define _125Hz          5
+#define _62_5Hz         6
+#define _31_25Hz        7
+#define _15_625Hz       8
+#define _7_813Hz        9
+#define _3_906Hz        10
 
 // Types de messages ESP NOW
-#define CMD_PING      0  
-#define CMD_CONFIG    1  
-#define REPLY_PONG    2  
-#define REPLY_ACK     3  
+#define CMD_PING        0  
+#define CMD_CONFIG      1   
+#define REPLY_PONG      2  
+#define REPLY_ACK       3  
+
+// Tensions batterie
+#define V_MAX           4.2 
+#define V_MIN           3.0
 
 // Bus SPI dédié pour communiquer avec le lecteur SD
 SPIClass sdSPI(HSPI);
@@ -72,6 +76,8 @@ struct __attribute__((packed)) SyncPacket {
   uint8_t mode;      
   uint8_t range;     
   uint8_t frequency; 
+  uint32_t nodeID;
+  uint8_t batteryLevel;
 };
 
 SyncPacket pendingConfig;            
@@ -200,6 +206,8 @@ void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
         reply.mode = currentMode;
         reply.range = currentRange;
         reply.frequency = currentFreq;
+        reply.nodeID = (uint32_t)arduinodeID;
+        reply.batteryLevel = (uint8_t)getBatteryState();
 
         esp_now_send(broadcastAddress, (uint8_t *) &reply, sizeof(reply));
       }
@@ -213,8 +221,15 @@ void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
 
             // Pour éviter des envois redondants
             if(discoveredNodes.insert(originMacStr).second){
-              uint8_t count = discoveredNodes.size() + 1;
-              pSyncChar->setValue(&count, 1);
+              struct __attribute__((packed)) NodeStatusBLE {
+                uint32_t nodeID;
+                uint8_t batteryLevel;
+              } remoteNode;
+
+              remoteNode.nodeID = packet.nodeID;
+              remoteNode.batteryLevel = packet.batteryLevel;
+
+              pSyncChar->setValue((uint8_t*)&remoteNode, sizeof(remoteNode));
               pSyncChar->notify();
             }
 
@@ -385,6 +400,17 @@ class SyncCallbacks: public NimBLECharacteristicCallbacks {
       void onWrite(NimBLECharacteristic* pCharacteristic, NimBLEConnInfo& connInfo) {
         std::string value = pCharacteristic->getValue();
         if (value.length() > 0 && value[0] == 1) {
+          struct __attribute__((packed)) NodeStatusBLE {
+            uint32_t nodeID;
+            uint8_t batteryLevel;
+          } localNode;
+
+          localNode.nodeID = (uint32_t)arduinodeID;
+          localNode.batteryLevel = (uint8_t)getBatteryState();
+
+          pSyncChar->setValue((uint8_t*)&localNode, sizeof(localNode));
+          pSyncChar->notify();
+
           if(broadcast) broadcastConfiguration(CMD_PING, currentMode, currentRange, currentFreq);
         }
       }
@@ -584,6 +610,25 @@ void setupWiFiAndServer() {
   server.begin();
 }
 
+float getBatteryState() {
+  int adcValue = analogRead(A0);
+  float vMeasured = (adcValue * 3.3) / 4095.0;
+  float vBat = vMeasured * 3/2;
+  float percentage = ((vBat - V_MIN) / (V_MAX - V_MIN)) * 100.0;
+  
+  if (percentage > 100.0) percentage = 100.0;
+  if (percentage < 0.0) percentage = 0.0;
+  
+  Serial.print("Tension brute mesurée (A0) : ");
+  Serial.print(vMeasured);
+  Serial.print(" V | Tension Batterie : ");
+  Serial.print(vBat);
+  Serial.print(" V | Niveau restant : ");
+  Serial.print(percentage, 1);
+  Serial.println(" %");
+
+  return percentage;
+}
 
 /* - - - Configuration globale du système - - - */
 void setup() {
