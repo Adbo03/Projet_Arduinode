@@ -64,7 +64,7 @@ def configure_wifi(ssid, password):
         for i in range(12):
             time.sleep(1)
             try:
-                r = requests.get("http://192.168.4.1/list", timeout=1.5)
+                r = requests.get("http://192.168.4.1/download", timeout=1.5)
                 if r.status_code == 200:
                     print(f"Connecté avec succès ! IP réseau obtenue.")
                     return True
@@ -299,7 +299,7 @@ def collect_data_wifi(source, save_mode="CSV + BIN"):
     if connected_to_node:
         subprocess.run("netsh wlan disconnect", shell=True, stdout=subprocess.DEVNULL)
 
-    # # # Collecte du fichier de la source (si activée) # # #
+    # # # Collecte du fichier de la source (si active) # # #
     
     if source:
         source_ssid = "SOURCE_WIFI"

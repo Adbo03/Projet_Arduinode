@@ -5,6 +5,8 @@
 #include <map>
 #include "SdFat.h"
 #include <TinyGPS++.h>
+#include <WiFi.h>
+#include <WebServer.h>
 
 // Signal
 #define SOURCE_PIN        6
@@ -12,14 +14,15 @@
 #define TABLE_SIZE        128
 
 // Modes
-#define ON                1
 #define OFF               0
+#define ON                1
+#define WIFI_COLLECT      2
 
 // SPI
 #define SD_CS             10
 
 // GPS
-#define PPS_PIN           2
+#define PPS_PIN           9
 
 #define MAX_NB_IMPULSE    3
 
@@ -40,6 +43,10 @@ volatile uint32_t pps_micros = 0;
 int sampleID = 0;
 float lastLat = 0, lastLon = 0;
 char hours[3], minutes[3], seconds[3], micros_s[7], day[3], month[3], year[5];
+
+// WIFI
+WebServer server(80);
+volatile bool wifiStarted = false;
 
 // Objets et pointeurs BLE 
 NimBLEServer* pServer = NULL;
@@ -102,6 +109,72 @@ class FreqCallbacks: public NimBLECharacteristicCallbacks {
         }
       }
 };
+
+/* - - - Fonctions de configuration et de gestion pour l'envoi des données en WIFI - - - */
+
+void handleDownloadFile() {
+  // Récupère le nom envoyé ou prend "Source.csv" par défaut
+  String filename = server.hasArg("name") ? server.arg("name") : "Source.csv";
+  if (!filename.startsWith("/")) filename = "/" + filename;
+
+  FsFile dataFile;
+
+  if (dataFile.open(filename.c_str(), O_RDONLY)) {
+    uint64_t fileSize = dataFile.size();
+    
+    server.setContentLength(fileSize);
+    server.send(200, "application/octet-stream", "");
+
+    uint8_t buffer[512]; 
+    while (dataFile.available()) {
+      int bytesRead = dataFile.read(buffer, sizeof(buffer));
+      if (bytesRead > 0) {
+        server.client().write(buffer, bytesRead);
+      }
+    }
+
+    dataFile.close();
+  }
+  else {
+    server.send(404, "text/plain", "File not found");
+  }
+}
+
+void handleDeleteFile() {
+  // Récupère le nom envoyé ou prend "Source.csv" par défaut
+  String filename = server.hasArg("name") ? server.arg("name") : "Source.csv";
+  if (!filename.startsWith("/")) filename = "/" + filename;
+
+  if (sd.exists(filename.c_str())) {
+    if (sd.remove(filename.c_str())) {
+      server.send(200, "text/plain", "DONE : File removed");
+    } 
+    else {
+      server.send(500, "text/plain", "Error : File failed to be erased");
+    }
+  } 
+  else { 
+    server.send(404, "text/plain", "File not found");
+  }
+}
+
+void handleReboot() {
+  server.send(200, "text/plain", "Rebooting...");
+  delay(500);
+  ESP.restart();
+}
+
+void setupWiFiAndServer() {
+  String ssid = "SOURCE_WIFI";
+
+  WiFi.softAP(ssid.c_str(), "password123");
+  
+  server.on("/download", HTTP_GET, handleDownloadFile);
+  server.on("/delete", HTTP_GET, handleDeleteFile);
+  server.on("/reboot", HTTP_GET, handleReboot);
+  
+  server.begin();
+}
 
 /* - - - Génération du signal - - - */
 
@@ -230,7 +303,7 @@ void setup() {
   pAdvertising->start();
   
   ledcSetup(0, 40000, SOURCE_RES); 
-  ledcWrite(0, TABLE_SIZE/2 - 1);
+  ledcWrite(0, ((1 << SOURCE_RES) - 1)/2);
 
   pinMode(SOURCE_PIN, OUTPUT);
   digitalWrite(SOURCE_PIN, LOW);
@@ -265,7 +338,7 @@ void loop() {
       while (millis() - startAttempt < 2000) {
         while (Serial1.available() > 0) {
           if (gps.encode(Serial1.read())) {
-            if (gps.location.isValid() && gps.time.isValid() && gps.date.isValid()) {
+            if (gps.location.isValid() && gps.time.isValid()) {
               lastLat = gps.location.lat();
               lastLon = gps.location.lng();
               gpsFound = true;
@@ -327,14 +400,25 @@ void loop() {
     if(modeWritten){
       modeWritten = false;
 
+      pModeChar->setValue((uint8_t*) &currentMode, (size_t) sizeof(currentMode));
+
       if(currentMode == ON) ledcAttachPin(SOURCE_PIN, 0);
+
+      else if(currentMode == WIFI_COLLECT){
+        pinMode(SOURCE_PIN, OUTPUT);
+        digitalWrite(SOURCE_PIN, LOW);
+
+        // Passage du BLE au WiFi
+        NimBLEDevice::deinit(true); 
+        delay(200);
+        wifiStarted = false;
+      }
 
       else{
         pinMode(SOURCE_PIN, OUTPUT);
         digitalWrite(SOURCE_PIN, LOW);
       }
 
-      pModeChar->setValue((uint8_t*) &currentMode, (size_t) sizeof(currentMode));
     }
 
     if(freqWritten){
@@ -347,12 +431,24 @@ void loop() {
     }
   }
 
+  if(currentMode == WIFI_COLLECT){
+
+    if(!wifiStarted){
+      setupWiFiAndServer();
+      wifiStarted = true;
+      delay(500);
+    }
+
+    server.handleClient();
+  }
+
   // Gestion automatique de la reconnexion
-  if (!deviceConnected && wasConnected) {
+  if (!deviceConnected && wasConnected && currentMode != WIFI_COLLECT) {
     delay(500); 
     NimBLEDevice::startAdvertising();
     wasConnected = false;
   }
+  
   if (deviceConnected && !wasConnected) {
     wasConnected = true;
   }

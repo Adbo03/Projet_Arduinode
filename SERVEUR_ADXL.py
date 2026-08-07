@@ -693,6 +693,12 @@ def launch_wifi_collect(event):
             ble_loop
         )
 
+        if client_Source :
+            asyncio.run_coroutine_threadsafe(
+                client_Source.write_gatt_char(UUID_SOURCE_MODE, bytearray([2]), response=False), 
+                ble_loop
+            )
+
         if is_recording:
             is_recording = False
     
